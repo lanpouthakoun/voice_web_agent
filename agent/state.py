@@ -13,6 +13,7 @@ from browsergym.utils.obs import flatten_axtree_to_str
 from browsergym.core.action.highlevel import HighLevelActionSet
 from pydantic import BaseModel
 from agent.SpeechOutput import SpeechOutput
+import hashlib
 
 
 class IntentFormat(BaseModel):
@@ -51,6 +52,40 @@ class State:
         self.actions = []
         self.consecutive_errors = 0
         self.intent = None
+        self.consecutive_no_change = 0  # NEW
+        self.last_page_hash = None      # NEW
+        self.last_url = None            # NEW
+    
+    def compute_page_hash(self, obs: dict) -> str:
+        """Create a hash of the meaningful page state."""
+        # Combine URL + accessibility tree structure
+        url = obs.get('url', '')
+        axtree = str(obs.get('axtree_object', ''))[:5000]  # First 5k chars
+        
+        content = f"{url}|{axtree}"
+        return hashlib.md5(content.encode()).hexdigest()
+    
+    def check_page_changed(self, new_obs: dict) -> bool:
+        """Returns True if page actually changed."""
+        new_hash = self.compute_page_hash(new_obs)
+        new_url = new_obs.get('url', '')
+        
+        changed = (
+            new_hash != self.last_page_hash or 
+            new_url != self.last_url
+        )
+        
+        # Update tracking
+        self.last_page_hash = new_hash
+        self.last_url = new_url
+        
+        return changed
+    
+    def record_no_change(self):
+        self.consecutive_no_change += 1
+        self.consecutive_errors += 1  # Treat as error too
+    def record_change(self):
+        self.consecutive_no_change = 0
 
     def set_obs(self, obs: dict):
         self.obs = obs
@@ -76,3 +111,6 @@ class State:
         self.intent = intent
     def get_intent(self):
         return self.intent
+    
+    def is_stuck(self):
+        return self.consecutive_no_change >= 3 or self.consecutive_errors >= 3

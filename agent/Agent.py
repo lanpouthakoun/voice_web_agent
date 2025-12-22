@@ -12,7 +12,9 @@ from pydantic import BaseModel
 from agent.SpeechOutput import SpeechOutput
 from agent.state import State
 
-
+class ReflectionFormat(BaseModel):
+    what_went_wrong: str
+    new_approach: str
 class OutputFormat(BaseModel):
     explanation: str
     code: str
@@ -77,7 +79,7 @@ class BrowserAgent:
             'browsergym/openended',
             task_kwargs={'start_url': 'about:blank'},
             headless=False,
-            tags_to_mark='all'
+            tags_to_mark='standard_html',
         )
         self.obs, _ = self.env.reset()
         print("✅ Browser ready!")
@@ -105,7 +107,7 @@ class BrowserAgent:
             model=self.llm,
             input=[{
                 "role": "system", 
-                "content": "You're about to help with a web task. Briefly describe your understanding and approach. Be conversational, like you're thinking out loud."
+                "content": "You're about to help with a web task. Briefly describe your understanding and approach. Be conversational, like you're thinking out loud. Do NOT ask the user for permission or clarification - just complete the task"
             }, {
                 "role": "user", 
                 "content": f"Goal: {goal}"
@@ -221,6 +223,21 @@ class BrowserAgent:
 
         try:
             self.obs, reward, done, truncated, info = self.env.step(action)
+            # Check for explicit error
+            error = self.obs.get('last_action_error', '')
+            if error:
+                print(f"⚠️ Action error: {error}")
+                state.record_error()
+            else:
+                # NEW: Check if page actually changed
+                if state.check_page_changed(self.obs):
+                    print("✅ Page updated")
+                    state.record_success()
+                    state.record_change()
+                else:
+                    print("⚠️ No page change detected - action may have failed silently")
+                    state.record_no_change()
+            
             state.set_obs(self.obs)
 
             error = self.obs.get('last_action_error', '')
@@ -340,13 +357,38 @@ Keep explanations to ONE short sentence. Sound like a helpful friend, not a robo
 
         prompt += CONCISE_INSTRUCTION
 
-        if state.get_errors() > 3:
-            prompt += """
+        if state.is_stuck() > 3:
+            print("===============IN ERROR==============")
+            reflection = self.reflect_on_failure(state, error_prefix)
+            
+            prompt += f"""
 
-⚠️  WARNING: You are failing this task. Try a completely different approach.
+⚠️  WARNING: You are failing this task. Try this new approach: {reflection.new_approach}
+
 DO NOT send_msg_to_user until you have ALL requested information.
 """
         return prompt
+
+    def reflect_on_failure(self, state: State, last_error: str) -> str:
+        
+        response = self.client.beta.chat.completions.parse(
+            model=self.llm,
+            input=[{
+                "role": "system",
+                "content": "The last few actions failed. Briefly reflect on what's not working and suggest a different approach. Be honest and conversational."
+            }, {
+                "role": "user", 
+                "content": f"Goal: {state.goal}\nRecent actions: {state.get_actions()[-3:]}\nLast error: {last_error}. If no error, our actions have not been changing the page."
+            }],
+            text_format=ReflectionFormat
+        )
+        reflection = response.choices[0].message.parsed
+        
+        # Speak the reflection
+        if self.speech:
+            self.speech.speak(f"Hmm, that's not working. {reflection.new_approach}", wait=True)
+        
+        return reflection.new_approach
 
     def cleanup(self):
         """Shutdown the agent."""
