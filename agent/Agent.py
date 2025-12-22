@@ -8,6 +8,12 @@ from openai import OpenAI
 from dataclasses import dataclass, field
 from typing import List, Optional
 from browsergym.core.action.highlevel import HighLevelActionSet
+from pydantic import BaseModel
+
+
+class OutputFormat(BaseModel):
+    explanation: str
+    code: str
 
 CONCISE_INSTRUCTION = """\
 
@@ -16,6 +22,8 @@ Here is another example with chain of thought of a valid action when providing a
 In order to accomplish my goal I need to send the information asked back to the user. This page list the information of HP Inkjet Fax Machine, which is the product identified in the objective. Its price is $279.49. I will send a message back to user with the answer.
 ```send_msg_to_user("$279.49")```
 "
+
+Make sure you have an explanation and an action.
 """
 
 
@@ -162,17 +170,18 @@ class Agent:
             State: The new state of the environment
         """
         prompt = self.get_prompt(state, goal)
-        response = self.client.chat.completions.create(
+        response = self.client.responses.parse(
             model=self.llm,
-            messages=[{"role": "system", "content": system_message}, {"role": "user", "content": prompt}],
+            input=[{"role": "system", "content": system_message}, {"role": "user", "content": prompt}],
+            text_format=OutputFormat,
         )
-        text = response.choices[0].message.content
-        explanation = text.split('```')[0].strip() if '```' in text else text
-        action = text.split('```')[1] if '```' in text else text
-        print(text)
+        event = response.output_parsed
+        explanation = event.explanation
+        action = event.code
         self.obs, *_ = self.env.step(action)
         state.set_obs(self.obs)
         return state
+    
     def get_system_message(self, goal: str) -> str:
         return f"""\
         # Instructions
@@ -185,6 +194,8 @@ class Agent:
 
         # Action Space
         {self.action_space.describe(with_long_description=False, with_examples=True)}
+
+
         """
     
     def get_prompt(self, state: State, goal: str) -> str:
