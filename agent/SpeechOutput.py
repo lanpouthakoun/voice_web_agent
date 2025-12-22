@@ -6,7 +6,7 @@ from elevenlabs import ElevenLabs
 class SpeechOutput:
     """Handles text-to-speech using ElevenLabs."""
     
-    def __init__(self, api_key: str, voice_id: str = "JBFqnCBsd6RMkjVDRZzb"):
+    def __init__(self, api_key: str, voice_id: str = "nPczCjzI2devNBz1zQrb"):
         """
         Initialize ElevenLabs TTS.
         

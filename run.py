@@ -61,13 +61,13 @@ def main():
             print(f"⚠️  Invalid microphone index: {sys.argv[1]}. Using default.")
 
     # Optional voice ID
-    voice_id = os.getenv('ELEVENLABS_VOICE_ID', 'JBFqnCBsd6RMkjVDRZzb')
+    voice_id = os.getenv('ELEVENLABS_VOICE_ID', 'nPczCjzI2devNBz1zQrb')
 
     # Create and run
     voice_agent = VoiceControlledAgent(
         openai_api_key=openai_api_key,
         elevenlabs_api_key=elevenlabs_api_key,
-        llm="gpt-4o",
+        llm="gpt-5.2",
         voice_id=voice_id,
         mic_index=mic_index
     )

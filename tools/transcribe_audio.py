@@ -119,6 +119,7 @@ class VoiceTranscriber:
                         print("📝 TRANSCRIPTION:")
                         print("="*60)
                         print(response.text)
+                        
                         print("="*60 + "\n")
                         
                     except Exception as e:

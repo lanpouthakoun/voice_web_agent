@@ -101,7 +101,6 @@ class VoiceControlledAgent:
                 include=["logprobs"],
                 timeout=10,
             )
-
             if response.logprobs:
                 avg_logprob = sum(lp.logprob for lp in response.logprobs) / len(response.logprobs)
                 if avg_logprob < -0.5:
@@ -171,14 +170,11 @@ class VoiceControlledAgent:
                     wav_data = self.transcription_queue.get()
                     
                     text = self._transcribe_audio(wav_data)
-                    
+
                     if text:
                         print(f"\n📝 Transcription: {text}")
                         print("=" * 60)
-                        
-                        # Confirm the command
-                        self.speech.speak(f"Got it. Working on: {text}", wait=True)
-                        
+                                
                         # Start agent with transcribed goal
                         self._run_agent_with_goal(text)
                     else:

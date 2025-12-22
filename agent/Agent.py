@@ -10,12 +10,17 @@ from browsergym.utils.obs import flatten_axtree_to_str
 from browsergym.core.action.highlevel import HighLevelActionSet
 from pydantic import BaseModel
 from agent.SpeechOutput import SpeechOutput
+from agent.state import State
 
 
 class OutputFormat(BaseModel):
     explanation: str
     code: str
 
+
+class IntentFormat(BaseModel):
+    understanding: str  # What the user actually wants
+    approach: str       # High-level strategy (1-2 sentences)
 
 CONCISE_INSTRUCTION = """\
 
@@ -30,40 +35,10 @@ IMPORTANT RULES:
 - If information is missing, navigate/click/search to find it first.
 - Never ask the user "if you want" or "would you like" - just do it.
 - Never send partial answers or say "I couldn't find" - keep trying.
-- Keep explanations concise (1-2 sentences) as they will be spoken aloud.
+
 
 Make sure you have an explanation and an action.
 """
-
-
-class State:
-    """Tracks the current state of the environment."""
-    def __init__(self, goal: str):
-        self.goal = goal
-        self.obs = None
-        self.actions = []
-        self.consecutive_errors = 0
-
-    def set_obs(self, obs: dict):
-        self.obs = obs
-
-    def get_obs(self) -> dict:
-        return self.obs
-
-    def get_actions(self):
-        return self.actions
-
-    def add_action(self, action: str):
-        self.actions.append(action)
-
-    def record_success(self):
-        self.consecutive_errors = 0
-
-    def record_error(self):
-        self.consecutive_errors += 1
-
-    def get_errors(self):
-        return self.consecutive_errors
 
 
 @dataclass
@@ -100,7 +75,7 @@ class BrowserAgent:
         print("🌐 Starting browser...")
         self.env = gym.make(
             'browsergym/openended',
-            task_kwargs={'start_url': 'https://www.google.com/maps'},
+            task_kwargs={'start_url': 'about:blank'},
             headless=False,
             tags_to_mark='all'
         )
@@ -124,6 +99,20 @@ class BrowserAgent:
 
         if self.env:
             self.env.close()
+    
+    def get_intent(self, goal):
+        response = self.client.responses.parse(
+            model=self.llm,
+            input=[{
+                "role": "system", 
+                "content": "You're about to help with a web task. Briefly describe your understanding and approach. Be conversational, like you're thinking out loud."
+            }, {
+                "role": "user", 
+                "content": f"Goal: {goal}"
+            }],
+            text_format=IntentFormat,
+        )
+        return response.output_parsed
 
     def _execute_goal(self, goal: str, on_complete: Optional[callable] = None, max_steps: int = 50):
         """Execute a goal - runs on agent thread."""
@@ -132,13 +121,16 @@ class BrowserAgent:
             self._is_running = True
 
         state = State(goal=goal)
+        intent = self.get_intent(goal)
+        state.set_intent(intent)
         state.set_obs(self.obs)
         system_message = self.get_system_message(goal)
 
         # Announce the goal
         print(f"\n🎯 New Goal: {goal}\n")
         if self.speech:
-            self.speech.speak(f"New goal: {goal}", wait=True)
+            self.speech.speak(intent.approach, wait=True)
+            
 
         try:
             for step_num in range(max_steps):
@@ -147,13 +139,11 @@ class BrowserAgent:
                         print("\n🛑 Task interrupted by new voice command.")
                         if self.speech:
                             self.speech.stop()
-                            self.speech.speak("Task interrupted.", wait=True)
                         return
 
                 print(f"\n--- Step {step_num + 1}/{max_steps} ---")
 
                 if state.get_errors() > 5:
-                    print("❌ Too many errors, stopping.")
                     if self.speech:
                         self.speech.speak("Too many errors. Stopping task.", wait=True)
                     break
@@ -192,16 +182,16 @@ class BrowserAgent:
         """Execute a single step with speech. Returns True if task is complete."""
         prompt = self.get_prompt(state, goal)
 
-        response = self.client.beta.chat.completions.parse(
+        response = self.client.responses.parse(
             model=self.llm,
-            messages=[
+            input=[
                 {"role": "system", "content": system_message},
                 {"role": "user", "content": prompt}
             ],
-            response_format=OutputFormat,
+            text_format=OutputFormat,
         )
 
-        event = response.choices[0].message.parsed
+        event = response.output_parsed
         explanation = event.explanation
         action = event.code.strip()
 
@@ -308,7 +298,12 @@ IMPORTANT:
 - Do NOT ask the user for permission or clarification - just complete the task.
 - Only use send_msg_to_user() when you have ALL the information requested.
 - If you need more information, take actions to get it (click, navigate, search).
-- Keep your explanations concise (1-2 sentences) as they will be spoken aloud.
+
+When explaining your actions, speak naturally like you're thinking out loud:
+- BAD: "In order to accomplish my goal I need to click the search button"
+- GOOD: "Let me search for that..." or "I'll click on this coffee shop to see the reviews"
+
+Keep explanations to ONE short sentence. Sound like a helpful friend, not a robot.
 
 # Goal:
 {goal}
@@ -316,7 +311,6 @@ IMPORTANT:
 # Action Space
 {self.action_space.describe(with_long_description=False, with_examples=True)}
 """
-
     def get_prompt(self, state: State, goal: str) -> str:
         if state.obs is None:
             return ""
@@ -338,12 +332,11 @@ IMPORTANT:
 # Previous Actions:
 {' | '.join(state.get_actions()[-5:]) if state.get_actions() else 'None'}
 
-Here is an example with chain of thought of a valid action when clicking on a button:
-"
-In order to accomplish my goal I need to click on the button with bid 12
-click("12")
-"
+
+
 """.strip()
+        prompt += f"""Intent: \n 
+{state.get_intent().approach}"""
 
         prompt += CONCISE_INSTRUCTION
 
