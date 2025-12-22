@@ -23,7 +23,7 @@ In order to accomplish my goal I need to send the information asked back to the 
 ```send_msg_to_user("$279.49")```
 "
 
-Make sure you have an explanation and an action.
+Make sure you have an explanation and an action. Make the explanation such that it sounds like you are telling this to someone.
 """
 
 
@@ -73,34 +73,6 @@ class AgentMemory:
                 break
         return count
 
-@dataclass
-class Plan:
-    """A high-level plan for accomplishing the goal."""
-    steps: list[str]
-    current_step: int = 0
-    
-    def current(self) -> str:
-        if self.current_step < len(self.steps):
-            return self.steps[self.current_step]
-        return "All planned steps completed"
-    
-    def advance(self):
-        self.current_step += 1
-    
-    def is_complete(self) -> bool:
-        return self.current_step >= len(self.steps)
-    
-    def format_for_prompt(self) -> str:
-        lines = []
-        for i, step in enumerate(self.steps):
-            if i < self.current_step:
-                marker = "✓"
-            elif i == self.current_step:
-                marker = "→"
-            else:
-                marker = " "
-            lines.append(f"{marker} {i+1}. {step}")
-        return '\n'.join(lines)
     
 class State:
     """Tracks the current state of the environment. No plan is needed, just keeps track of whether the goal is accomplished or not."""
@@ -110,10 +82,16 @@ class State:
         self.llm = llm
         self.obs = None
         self.client = client
+        self.actions = []
+        self.consecutive_errors = 0
+
     def set_obs(self, obs: dict):
         self.obs = obs
     def get_obs(self) -> dict:
         return self.obs
+    
+    def get_actions(self):
+        return self.actions
     
     def get_prompt(self) -> str:
         return f"""
@@ -128,38 +106,64 @@ class State:
 
         Return true if the goal is accomplished, false otherwise.
         """
+    def add_action(self, action):
+        self.actions.append(action)
     def is_complete(self) -> bool:
-        """Returns True if the goal is accomplished, False otherwise. Uses AI to check if the goal is accomplished"""
         if self.obs is None:
             return False
         response = self.client.chat.completions.create(
             model=self.llm,
             messages=[{"role": "user", "content": self.get_prompt()}],
         )
-        text = response.choices[0].message.content
-        return text == "true"
+        text = response.choices[0].message.content.strip().lower()
+        return "true" in text or "yes" in text or "accomplished" in text
+    
+    def record_success(self):
+        self.consecutive_errors = 0
 
-class Agent:
+    def record_error(self):
+        self.consecutive_errors += 1
+    def get_errors(self):
+        return self.consecutive_errors
+
+
+
+class BrowserAgent:
     def __init__(self, llm: str, api_key: str):
         self.client = OpenAI(api_key=api_key)
         self.llm = llm
         self.api_key = api_key
-        self.env = gym.make('browsergym/openended', task_kwargs={'start_url': 'about:blank', 'goal': 'PLACEHOLDER_GOAL'}, headless=False, tags_to_mark='all')
-        self.action_space = HighLevelActionSet(subsets=['chat', 'nav', 'bid'], strict=False, multiaction=False)
-
+        self.env = gym.make('browsergym/openended', task_kwargs={'start_url': 'about:blank', 'goal': 'PLACEHOLDER_GOAL'},headless=False, tags_to_mark='all')
+        self.action_space = HighLevelActionSet(subsets=['chat', 'nav', 'bid'], strict=False, multiaction=True)
         self.obs, _ = self.env.reset()
+        self.last_action = None
 
-    def run(self, goal: str):
-        """"
-        Args:
-            goal: The goal the user wants to accomplish
-        Returns:
-            None: this should be a loop that runs until the goal is accomplished or the actions break
-        """
+    def run(self, goal: str, max_steps: int = 50):
         state = State(goal=goal, llm=self.llm, client=self.client)
         system_message = self.get_system_message(goal)
-        while not state.is_complete():
-            state = self.step(state, goal, system_message)
+        
+        try:
+            for step_num in range(max_steps):
+                print(f"\n--- Step {step_num + 1}/{max_steps} ---")
+                
+                if state.is_complete():
+                    print("Goal accomplished!")
+                    return True
+                
+                # Stop if stuck
+                if state.get_errors() > 5:
+                    print("Too many repeated actions, stopping.")
+                    return False
+                    
+                state = self.step(state, goal, system_message)
+                if state == True:
+                    break
+            
+            print(f"Reached max steps ({max_steps})")
+            return False
+            
+        finally:
+            self.env.close()
 
     def step(self, state: State, goal: str, system_message: str):
         """
@@ -177,8 +181,24 @@ class Agent:
         )
         event = response.output_parsed
         explanation = event.explanation
+        print(explanation)
         action = event.code
+        state.add_action(action)
+        
         self.obs, *_ = self.env.step(action)
+        if self.last_action == action:
+            state.record_error()
+        else:
+            state.record_success()
+
+        self.last_action = action
+
+        if "send_msg_to_user" in action:
+            print(action)
+            print("Message sent to user - task complete")
+            # text_to_speech(final)
+        
+
         state.set_obs(self.obs)
         return state
     
@@ -189,12 +209,18 @@ class Agent:
         possible next action to accomplish your goal. Your answer will be interpreted
         and executed by a program, make sure to follow the formatting instructions.
 
+        IMPORTANT: 
+        - Complete the ENTIRE task before sending a message to the user.
+        - Do NOT ask the user for permission or clarification - just complete the task.
+        - Only use send_msg_to_user() when you have ALL the information requested.
+        - If you need more information, take actions to get it (click, navigate, search).
+
+
         # Goal:
         {goal}
 
         # Action Space
         {self.action_space.describe(with_long_description=False, with_examples=True)}
-
 
         """
     
@@ -204,12 +230,17 @@ class Agent:
         obs = state.get_obs()
         cur_axtree_txt = flatten_axtree_to_str(obs['axtree_object'])
         cur_url = obs['url']
+        error_prefix = obs['last_action_error']
         prompt = f"""
+            {error_prefix}
             # Current Page URL:
             {cur_url}
 
             # Current Accessibility Tree:
             {cur_axtree_txt}
+
+             # Previous Actions:
+            {' '.join(state.get_actions())}
 
             Here is an example with chain of thought of a valid action when clicking on a button:
             "
@@ -218,9 +249,11 @@ class Agent:
             "
             """.strip()
         prompt += CONCISE_INSTRUCTION
+        if state.get_errors() > 3:
+            prompt += "You are failing this task with your standard approach. Try a new approach."
         return prompt
 
 if __name__ == "__main__":
     load_dotenv('./.env', override=True)
-    agent = Agent(llm="gpt-5.2", api_key=os.getenv('OPENAI_API_KEY'))
-    agent.run("Open a new tab and navigate to youtube.com. Search up the latest news in the world.")
+    agent = BrowserAgent(llm="gpt-5.2", api_key=os.getenv('OPENAI_API_KEY'))
+    agent.run("I will arrive Pittsburgh Airport soon. Provide the name of a Hilton hotel in the vicinity, if available. Then, tell me the the walking distance to the nearest supermarket own by a local company from the hotel.")
