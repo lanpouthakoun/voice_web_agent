@@ -100,16 +100,45 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
             text_format=IntentFormat,
         )
         return response.output_parsed
+    
+    def add_goal(self, new_goal_text: str, max_steps: int):
+        """
+        Dynamically adds information to the current goal if running,
+        or starts a new run if idle.
+        """
+        with self._lock:
+            if self._is_running and self.current_state:
+                print(f"UPDATE: Adding to existing goal: '{new_goal_text}'")
+                
+               
+                
+                self.current_state.add_note(f"USER NOTE: {new_goal_text}")
+                
+                if self.speech:
+                    self.speech.stop(mute=True)
+                    
+                   
+                    self.speech.speak(
+                        f"Okay, let me add that to the plan.", 
+                        wait=True, 
+                        ignore_mute=True
+                    )
+                    
+                    self.speech.unmute()
 
+                return
+        
+        print("\n UPDATE: Agent idle, starting new goal.")
+        self.run(new_goal_text, max_steps)
     def execute_goal(self, goal: str, on_complete: Optional[callable] = None, max_steps: int = 50):
         """Execute a goal - runs on agent thread."""
         with self._lock:
             self._stop_requested = False
             self._is_running = True
 
-        state = State(goal=goal)
+        self.current_state = State(goal=goal)
         intent = self.get_intent(goal)
-        state.intent = intent
+        self.current_state.intent = intent
         
         system_message = self.get_system_message(goal)
 
@@ -117,8 +146,8 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
             self.speech.speak(intent.approach, wait=True)
 
         if self.obs:
-            initial_obs_event = state.update_from_observation(self.obs)
-            state.add_event(initial_obs_event)
+            initial_obs_event = self.current_state.update_from_observation(self.obs)
+            self.current_state.add_event(initial_obs_event)
             
         try:
             for step_num in range(max_steps):
@@ -131,13 +160,13 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
 
                 print(f"\n--- Step {step_num + 1}/{max_steps} ---")
 
-                if state.consecutive_errors > 5:
+                if self.current_state.consecutive_errors > 5:
                     if self.speech:
                         self.speech.speak("I'm having too much trouble. I'll stop here.", wait=True)
                     break
 
                 try:
-                    done = self.step(state, system_message)
+                    done = self.step(system_message)
                     
                     if done:
                         print("\n✅ Goal accomplished!")
@@ -152,12 +181,12 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
                         error=f"System Exception: {str(e)}",
                         last_action_success=False
                     )
-                    state.add_event(error_event)
+                    self.current_state.add_event(error_event)
                     
                     try:
                         self.obs, _ = self.env.reset()
-                        reset_event = state.update_from_observation(self.obs)
-                        state.add_event(reset_event)
+                        reset_event = self.current_state.update_from_observation(self.obs)
+                        self.current_state.add_event(reset_event)
                     except Exception as reset_error:
                         print(f"❌ Could not recover: {reset_error}")
                         if self.speech:
@@ -175,10 +204,13 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
                 on_complete(False)
             print("\n🎤 Ready for next voice command. Press Option to speak...")
 
-    def step(self, state: State, system_message: str) -> bool:
+    def set_speech_thread(self, speech_thread):
+        self.speech_thread = speech_thread
+
+    def step(self, system_message: str) -> bool:
         """Execute a single step with speech. Returns True if task is complete."""
         
-        prompt = self.get_prompt(state)
+        prompt = self.get_prompt(self.current_state)
 
         response = self.client.responses.parse(
             model=self.llm,
@@ -206,9 +238,9 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
             thought=explanation,
             code=action_code
         )
-        state.add_event(action_event)
+        self.current_state.add_event(action_event)
         if new_notes:
-            state.add_note(new_notes)
+            self.current_state.add_note(new_notes)
 
         if "send_msg_to_user" in action_code:
             incomplete_phrases = [
@@ -225,7 +257,7 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
                     error="Action Rejected: You tried to ask the user a question. Complete the task yourself.",
                     last_action_success=False
                 )
-                state.add_event(error_event)
+                self.current_state.add_event(error_event)
                 return False
         if "send_msg_to_user" in action_code:
             if "send_msg_to_user" in action_code and self.speech:
@@ -241,19 +273,16 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
 
         
         if self.speech:
-            # Check if the previous thought is still being spoken
             if self.speech_thread and self.speech_thread.is_alive():
-                print(f"🙊 Skipping speech (Previous still active): '{explanation}'")
-                # We do NOT update self.speech_thread here; we let the old one finish
+                print(f"Skipping speech (Previous still active): '{explanation}'")
             else:
-                # Channel is clear, start speaking
                 self.speech_thread = self.speech.speak(explanation, wait = False)
 
         try:
             self.obs, reward, done, truncated, info = self.env.step(action_code)
 
-            obs_event = state.update_from_observation(self.obs)
-            state.add_event(obs_event)
+            obs_event = self.current_state.update_from_observation(self.obs)
+            self.current_state.add_event(obs_event)
 
             if obs_event.error:
                 print(f"⚠️ Action error: {obs_event.error}")
