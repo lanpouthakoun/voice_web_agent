@@ -23,6 +23,10 @@ class IntentFormat(BaseModel):
     understanding: str
     approach: str
 
+class ChangedIntentFormat(BaseModel):
+    changes: str
+    approach: str
+
 @dataclass
 class AgentCommand:
     goal: str
@@ -57,8 +61,7 @@ class BrowserAgent:
             'browsergym/openended',
             task_kwargs={'start_url': 'about:blank'},
             headless=False,
-            tags_to_mark='standard_html',
-            timeout=3000
+            tags_to_mark='standard_html'
         )
         self.obs, _ = self.env.reset()
         print("✅ Browser ready!")
@@ -86,7 +89,7 @@ class BrowserAgent:
             model=self.llm,
             input=[{
                 "role": "system", 
-                "content": """You're about to help with a web task. Briefly describe your understanding and approach.
+                "content": """You're about to help with a web task. Briefly describe your understanding and approach. Don't add extra functionality, do what the user desires.
 
                     Be conversational. Do NOT ask the user for permission - just complete the task."""
             }, {
@@ -127,7 +130,7 @@ class BrowserAgent:
                 3. **Output**: A conversational summary of the NEW plan.
 
                 # Output Rules
-                - **understanding**: Merge the old goal + new info into one clear objective.
+                - **changes**: Explain what the changes are from the new information as if you are explaining it to someone, keep it to only ONE sentence
                 - **approach**: A step-by-step plan focusing on what to do *next*.
                 - Be concise and direct.
                 """
@@ -135,7 +138,7 @@ class BrowserAgent:
                 "role": "user", 
                 "content": f"New Information/Correction: {new_information}"
             }],
-            text_format=IntentFormat,
+            text_format=ChangedIntentFormat,
         )
         return response.output_parsed
     
@@ -154,7 +157,7 @@ class BrowserAgent:
                 self.current_state.intent = new_intent.approach
                 if self.speech:                    
                     self.speech.speak(
-                        f"{new_intent.approach}", 
+                        f"{new_intent.changes}", 
                         wait=True, 
                         ignore_mute=True
                     )
@@ -367,11 +370,12 @@ class BrowserAgent:
 
             You control a web browser ONE ACTION AT A TIME. After each action, you see the result.
 
+
             ## Actions - EXACT SYNTAX (ONE per turn)
             ```
             fill('bid', 'text')        # Types text into field. DOES NOT SUBMIT.
             click('bid')               # Clicks an element
-            press('Enter')             # Press a key (after fill to submit)
+            press('bid', 'key_comb')       # Press a key (after fill to submit)
             goto('https://url.com')    # Navigate to URL
             scroll(0, 500)             # Scroll down (positive y = down)
             send_msg_to_user('msg')    # Return final answer to user
@@ -385,22 +389,23 @@ class BrowserAgent:
 
             ## OUTPUT FORMAT
             You must respond with this exact structure:
-            - **explanation**: A short, one-sentence justification for your action.
+            - **explanation**: A short, one-sentence explaining your action as if you are speaking to someone.
             - **code**: The specific action syntax (e.g., `click('55')`).
             - **scratchpad**: THIS IS YOUR MEMORY. Anything you write here gets SAVED to your permanent scratchpad. 
                 - Use this to record data you found (e.g., "Found Price of flight: $300").
                 - If you have no new data to save, leave this empty string "".
-                - DO NOT repeat previous items on your scratchpad; just add NEW findings.
+                - DO NOT repeat previous items on your scratchpad; just add NEW findings. THIS IS INCREDIBLY IMPORTANT
 
             ## Workflow Patterns
-            **Search:** fill('searchbox_id', 'query') → click('search_btn_id') or press('Enter')
+            **Search:** fill('searchbox_id', 'query') → click('search_btn_id')
             **Form:** fill('field1', 'value1') → fill('field2', 'value2') → click('submit_btn')
 
             ## CRITICAL RULES
-            1. fill() only types text - you MUST click a button or press Enter to submit
+            1. REFERENCE YOUR SCRATCHPAD AND PLAN FIRST ALWAYS BEFORE TAKING ACTION
             2. Use exact bid values from the accessibility tree
             3. If action fails, try a DIFFERENT element - don't repeat
             4. Look for modals/popups blocking the page
+            5. fill() only types text - you MUST click a button or press Enter to submit
 
             ## Your Goal
             {goal}
@@ -481,10 +486,6 @@ class BrowserAgent:
             action_code = f"click('{click_unquoted.group(1)}')"
             error_msg = f"Added quotes to bid: {original} -> {action_code}"
         
-        press_unquoted = re.match(r"press\s*\(\s*(\w+)\s*\)", action_code)
-        if press_unquoted and not action_code.startswith("press('") and not action_code.startswith('press("'):
-            action_code = f"press('{press_unquoted.group(1)}')"
-            error_msg = f"Added quotes to key: {original} -> {action_code}"
         
         return action_code, error_msg
 

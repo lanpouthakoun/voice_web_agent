@@ -149,6 +149,7 @@ class VoiceControlledAgent:
                 self.recording_thread.join(timeout=2.0)
 
             print("⏹️  Recording stopped. Processing New Goal...")
+            self.speech.unmute()
 
     def on_command_press(self):
         """Handle Command key press - ADD to existing goal."""
@@ -183,7 +184,7 @@ class VoiceControlledAgent:
                 self.recording_thread.join(timeout=2.0)
 
             print("⏹️  Recording stopped. Processing Addition...")
-            self.speech.unmute()
+            
 
     async def process_transcriptions(self):
         """Process transcription queue and dispatch to agent based on mode."""
