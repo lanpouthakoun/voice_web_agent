@@ -17,10 +17,6 @@ import hashlib
 from agent.Action import *
 
 
-class IntentFormat(BaseModel):
-    understanding: str  # What the user actually wants
-    approach: str       # High-level strategy (1-2 sentences)
-
 class OutputFormat(BaseModel):
     explanation: str
     code: str
@@ -44,98 +40,21 @@ IMPORTANT RULES:
 Make sure you have an explanation and an action.
 """
 
-
-# class State:
-#     """Tracks the current state of the environment."""
-#     def __init__(self, goal: str):
-#         self.goal = goal
-#         self.obs = None
-#         self.actions = []
-#         self.consecutive_errors = 0
-#         self.intent = None
-#         self.consecutive_no_change = 0  # NEW
-#         self.last_page_hash = None      # NEW
-#         self.last_url = None            # NEW
-    
-#     def compute_page_hash(self, obs: dict) -> str:
-#         """Create a hash of the meaningful page state."""
-#         # Combine URL + accessibility tree structure
-#         url = obs.get('url', '')
-#         axtree = str(obs.get('axtree_object', ''))[:5000]  # First 5k chars
-        
-#         content = f"{url}|{axtree}"
-#         return hashlib.md5(content.encode()).hexdigest()
-    
-#     def check_page_changed(self, new_obs: dict) -> bool:
-#         """Returns True if page actually changed."""
-#         new_hash = self.compute_page_hash(new_obs)
-#         new_url = new_obs.get('url', '')
-        
-#         changed = (
-#             new_hash != self.last_page_hash or 
-#             new_url != self.last_url
-#         )
-        
-#         # Update tracking
-#         self.last_page_hash = new_hash
-#         self.last_url = new_url
-        
-#         return changed
-    
-#     def record_no_change(self):
-#         self.consecutive_no_change += 1
-#         self.consecutive_errors += 1  # Treat as error too
-#     def record_change(self):
-#         self.consecutive_no_change = 0
-
-#     def set_obs(self, obs: dict):
-#         self.obs = obs
-
-#     def get_obs(self) -> dict:
-#         return self.obs
-
-#     def get_actions(self):
-#         return self.actions
-
-#     def add_action(self, action: str):
-#         self.actions.append(action)
-
-#     def record_success(self):
-#         self.consecutive_errors = 0
-
-#     def record_error(self):
-#         self.consecutive_errors += 1
-
-#     def get_errors(self):
-#         return self.consecutive_errors
-#     def set_intent(self, intent: IntentFormat):
-#         self.intent = intent
-#     def get_intent(self):
-#         return self.intent
-    
-#     def is_stuck(self):
-#         return self.consecutive_no_change >= 3 or self.consecutive_errors >= 3
-from pydantic import BaseModel
-
 class IntentFormat(BaseModel):
     understanding: str
     approach: str
 
 @dataclass
 class State:
-    # --- OpenHands Core Structure ---
     history: List[Event] = field(default_factory=list)
     inputs: Dict[str, Any] = field(default_factory=dict)
     
-    # --- Your Custom Tracking Logic ---
     goal: str = ""
     intent: Optional[IntentFormat] = None
     
-    # Tracking metrics
     consecutive_errors: int = 0
     consecutive_no_change: int = 0
     
-    # Hashing for change detection
     _last_page_hash: Optional[str] = None
     _last_url: Optional[str] = None
     _view: Optional[View] = None
@@ -191,10 +110,8 @@ class State:
             new_url != self._last_url
         )
         
-        # 2. Update Internal Metrics
         error_msg = obs_dict.get('last_action_error', '')
         
-        # Determine success status
         action_success = True
         
         if error_msg:
@@ -206,17 +123,14 @@ class State:
             action_success = False
             error_msg = "Action had no visible effect on the page"  # ← ADD THIS
         else:
-            # Success reset
             self.consecutive_errors = 0
             self.consecutive_no_change = 0
             self._last_page_hash = new_hash  # Only updated here!
             self._last_url = new_url
         
-        # Always update hash tracking (so we detect NEW no-changes)
         self._last_page_hash = new_hash
         self._last_url = new_url
 
-        # 3. Create and Return the Event
         return BrowserObservation(
             source=EventSource.ENVIRONMENT,
             url=new_url,
