@@ -415,7 +415,7 @@ class BrowserAgent:
             - **explanation**: A short, one-sentence explaining your action as if you are speaking to someone.
             - **code**: The specific action syntax (e.g., `click('55')`).
             - **scratchpad**: THIS IS YOUR MEMORY. Anything you write here gets SAVED to your permanent scratchpad. 
-                - Use this to record data you found (e.g., "Found Price of flight: $300").
+                - USE THIS TO SAVE IMPORTANT DATA YOU FIND THAT IS RELEVANT TO THE PLAN.
                 - If you have no new data to save, leave this empty string "".
                 - DO NOT repeat previous items on your scratchpad; just add NEW findings. THIS IS INCREDIBLY IMPORTANT
 
@@ -446,7 +446,7 @@ class BrowserAgent:
         cur_axtree_txt = last_obs.axtree_txt
         cur_url = last_obs.url
 
-        history_context = state.view.get_prompt_context(max_events=15)
+        history_context = state.view.get_prompt_context(max_events=5)
 
         prompt = f"""
             # Current Browser State

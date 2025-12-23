@@ -1,77 +1,151 @@
-# Voice Web Agent
-
-A real-time voice transcription tool that streams audio when you press the Option key and transcribes it using OpenAI's Realtime API with GPT-4o mini Transcribe model.
-
-## Features
-
-- 🎙️ Press and hold Option key to start streaming audio
-- ⏹️ Release Option key to stop streaming and get transcription
-- 📝 Real-time streaming transcription using OpenAI's Realtime API
-- 🔄 Live incremental transcription updates as you speak
-- 🔊 Automatic microphone access handling
+# Voice - Voice Browser Agent
 
 ## Setup
 
-### 1. Install Dependencies
+### Prerequisites
+
+- Python 3.11 or higher
+- pip (Python package manager)
+- macOS/Linux system (for pyaudio compatibility)
+
+### Step 1: Create Virtual Environment
 
 ```bash
-pip install -r requirements.txt
+# Navigate to project directory
+cd voice_web_agent
+
+# Create virtual environment
+python3 -m venv venv
+
+# Activate virtual environment
+# On macOS/Linux:
+source venv/bin/activate
+# On Windows:
+# venv\Scripts\activate
 ```
 
-**Note for macOS users:** You may need to install PortAudio first for `pyaudio`:
+### Step 2: Install System Dependencies (macOS)
+
+For PyAudio to work on macOS, you may need to install PortAudio:
+
 ```bash
+# Using Homebrew
 brew install portaudio
 ```
 
-### 2. Set Your API Key
+### Step 3: Install Python Dependencies
 
-You can provide your OpenAI API key in one of three ways:
-
-**Option 1: .env file (Recommended)**
-Create a `.env` file in the project directory:
 ```bash
-echo "OPENAI_API_KEY=your-api-key-here" > .env
+# Make sure virtual environment is activated
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-**Option 2: Environment Variable**
+### Step 4: Set Up Environment Variables
+
+Create a `.env` file in the project root directory:
+
 ```bash
-export OPENAI_API_KEY="your-api-key-here"
+# Create .env file
+touch .env
 ```
 
-**Option 3: Enter when prompted**
-The script will ask for your API key if it's not found in `.env` or environment variables.
+Add the following to `.env`:
 
-### 3. Grant Permissions
-
-On macOS, you'll need to grant:
-- **Microphone access** - The app will request this when you first run it
-- **Accessibility permissions** - For keyboard monitoring (System Settings > Privacy & Security > Accessibility)
-
-## Usage
-
-Run the script:
-```bash
-python transcribe_audio.py
+```
+OPENAI_API_KEY=your_openai_api_key_here
+ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+ELEVENLABS_VOICE_ID=nPczCjzI2devNBz1zQrb  # Optional, defaults to this value
 ```
 
-Then:
-1. Press and **hold** the **Option** (Alt) key to start recording
-2. Speak into your microphone
-3. **Release** the Option key to stop recording and get the transcription
-4. Press **Escape** or **Ctrl+C** to exit
+Replace `your_openai_api_key_here` and `your_elevenlabs_api_key_here` with your actual API keys.
 
-## How It Works
+### Step 5: Verify Installation
 
-- The script uses `pyaudio` to capture audio from your microphone
-- It monitors for Option key presses using `pynput`
-- When Option is pressed, it starts recording audio chunks
-- When Option is released, it stops recording and sends the audio to OpenAI's transcription API
-- Uses GPT-4o mini Transcribe model for efficient and accurate transcription
-- The transcribed text is displayed with logprobs validation
+```bash
+# Run the application
+python run.py
+```
 
-## Troubleshooting
+The application will prompt you for API keys if they're not found in the `.env` file.
 
-- **"Missing required package" error**: Make sure you've installed all dependencies with `pip install -r requirements.txt`
-- **No audio recording**: Check that microphone permissions are granted in System Settings
-- **Keyboard not detected**: Make sure Accessibility permissions are granted for the terminal/Python
-- **PortAudio errors on macOS**: Install PortAudio with `brew install portaudio`
+### Troubleshooting
+
+- **PyAudio installation issues**: On macOS, ensure PortAudio is installed via Homebrew. On Linux, you may need `portaudio19-dev` package.
+- **Microphone not detected**: You can specify a microphone index as a command-line argument: `python run.py 0` (where 0 is the microphone index)
+
+# Agent Architecture Analysis
+
+## Overview
+
+The agent consists of three main components: speech-to-text, a browser agent, and text-to-speech.
+
+---
+
+## 1. Speech-to-Text
+
+- **Model**: GPT-4o-mini-transcribe (OpenAI API)
+- **Rationale**: Best accuracy among tested options; familiarity with OpenAI API
+- **Input Mode**: Push-to-talk
+  - Prevents race conditions
+  - Allows user speech and agent speech to run in parallel with browser actions
+
+---
+
+## 2. Browser Agent
+
+### Browser Layer
+- **Tool**: PlaywrightMCP
+- **Rationale**: Returns DOM directly, avoiding latency from screenshot-based approaches
+
+### Orchestration
+- **Framework**: BrowserGym with PlaywrightMCP
+- **Rationale**: Enables future evaluation testing via Browser Company Evaluation System
+
+### Agent Architecture
+- **Design**: Custom agent based on Event Stream architecture (OpenHands paper)
+- **Rationale**:
+  - Browser environments are highly variable; planning architectures are less effective
+  - OpenHands-based agents perform best on SWE-Bench Verified
+  - Adapted this architecture for browser-specific tasks
+
+---
+
+## 3. Text-to-Speech
+
+- **API**: ElevenLabs (default voice)
+- **Execution**: Runs in parallel with browser agent actions
+- **Behavior**:
+  - Each action is paired with an explanation
+  - Explanations are skipped if speech is still playing
+  - Actions are sequential (for accuracy), so explanations naturally compound
+
+---
+
+## Architecture Diagram
+
+```mermaid
+flowchart LR
+    subgraph Input
+        A[User Speech] --> B[GPT-4o-mini-transcribe]
+        B --> C[Text Command]
+    end
+
+    subgraph BrowserAgent["Browser Agent"]
+        C --> D[Event Stream Agent<br/>OpenHands-based]
+        D <--> E[BrowserGym<br/>Orchestrator]
+        E <--> F[PlaywrightMCP<br/>DOM Access]
+        F <--> G[Browser]
+    end
+
+    subgraph Output
+        D --> H[Action + Explanation]
+        H --> I[ElevenLabs TTS]
+        I --> J[Audio Output]
+    end
+
+    style Input fill:#e1f5fe
+    style BrowserAgent fill:#fff3e0
+    style Output fill:#e8f5e9
+```
+
