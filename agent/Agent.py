@@ -44,7 +44,7 @@ class BrowserAgent:
         self.action_space = HighLevelActionSet(
             subsets=['chat', 'nav', 'bid'], 
             strict=False, 
-            multiaction=True
+            multiaction=False
         )
         self.obs = None
         self.speech_thread = None
@@ -349,10 +349,9 @@ Keep explanations to ONE short sentence.
 
         cur_axtree_txt = last_obs.axtree_txt
         cur_url = last_obs.url
-        error_prefix = last_obs.error
 
         # Get history context (includes loop detection)
-        history_context = state.view.get_prompt_context(max_events=10)
+        history_context = state.view.get_prompt_context(max_events=15)
 
         prompt = f"""
 # Current Browser State
