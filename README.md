@@ -68,84 +68,104 @@ python run.py
 ```
 
 The application will prompt you for API keys if they're not found in the `.env` file.
+The applciation will open up a Playwright Chromium window and you will be told how to add voice commands.
 
-### Troubleshooting
+## Agent Architecture Analysis
 
-- **PyAudio installation issues**: On macOS, ensure PortAudio is installed via Homebrew. On Linux, you may need `portaudio19-dev` package.
-- **Microphone not detected**: You can specify a microphone index as a command-line argument: `python run.py 0` (where 0 is the microphone index)
-
-# Agent Architecture Analysis
-
-## Overview
 
 The agent consists of three main components: speech-to-text, a browser agent, and text-to-speech.
 
 ---
 
-## 1. Speech-to-Text
+### 1. Speech-to-Text
 
 - **Model**: GPT-4o-mini-transcribe (OpenAI API)
 - **Rationale**: Best accuracy among tested options; familiarity with OpenAI API
 - **Input Mode**: Push-to-talk
-  - Prevents race conditions
+  - Prevents race conditions, allows user speech to take precedence over agent speech
   - Allows user speech and agent speech to run in parallel with browser actions
+
+#### Other Options Considered
+
+| Architecture | Why I Chose/Rejected |
+|--------------|---------------------|
+| **Whisper** |  Not as accurate |
+| **GPT-4o-mini-transcribe**  | More Accurate and Allowed for logprob confidence scores |
 
 ---
 
-## 2. Browser Agent
 
-### Browser Layer
+### 2. Browser Agent
+
+#### Browser Layer
 - **Tool**: PlaywrightMCP
 - **Rationale**: Returns DOM directly, avoiding latency from screenshot-based approaches
 
-### Orchestration
+##### Other Options Considered
+
+| Tool | Approach | Pros | Cons | Why I Chose/Rejected |
+|------|----------|------|------|---------------------|
+| **PlaywrightMCP** | DOM/AXTree access | Low latency, structured element IDs, no vision model needed | No visual reasoning, can't handle canvas/images | ✅ Chosen — speed was priority |
+| **Claude Computer Use** | Screenshot + vision | Can reason about layout, handles any UI | 200-500ms per frame, requires vision model calls | Too slow for real-time voice |
+| **Qwen Computer Use** | Screenshot + vision | Open weights, can self-host | Same latency issues as Claude |  Same tradeoff |
+| **BrowserUse** | High-level browser API | Simple API, good abstractions | Less control over action space | I wanted to create a custom agent |
+| **Browser Base** | Cloud browser infrastructure | Scalable, no local browser needed | Added network latency, cost | Local browser faster for demos |
+---
+
+#### Orchestration
 - **Framework**: BrowserGym with PlaywrightMCP
 - **Rationale**: Enables future evaluation testing via Browser Company Evaluation System
 
-### Agent Architecture
-- **Design**: Custom agent based on Event Stream architecture (OpenHands paper)
+#### Agent Architecture
+- **Design**: Custom agent based on Event Stream architecture (OpenHands paper) with persistent written memory (like notes) and light planning (not gated by plan)
 - **Rationale**:
-  - Browser environments are highly variable; planning architectures are less effective
-  - OpenHands-based agents perform best on SWE-Bench Verified
+  - Browser environments are highly variable; planning architectures are less effective (so we don't gate with the plan)
+  - OpenHands-based agents perform top-3 on SWE-Bench Verified
   - Adapted this architecture for browser-specific tasks
+
+
+##### Additional Architecture Notes
+
+- Implemented Loop Detection (when the agent was stuck it was detected and solved for)
+- Dual-mode interruption: Option key starts new goal, Command key modifies current goal mid-task
+- Syntax Detection (LLM might return poor output, this was accounted for)
+
+##### Other Options Considered
+
+| Architecture | Description | Why I Chose/Rejected |
+|--------------|-------------|---------------------|
+| **Planning Agent** | Generate full plan, then execute |  Plans go stale after one action in dynamic DOMs |
+| **Event Stream (OpenHands)** | One action → observe → repeat | Tight feedback loops handle page changes |
+| **Tree Search (MCTS)** | Explore action branches | Too slow for real-time voice interaction |
 
 ---
 
-## 3. Text-to-Speech
+### 3. Text-to-Speech
 
 - **API**: ElevenLabs (default voice)
 - **Execution**: Runs in parallel with browser agent actions
 - **Behavior**:
   - Each action is paired with an explanation
-  - Explanations are skipped if speech is still playing
-  - Actions are sequential (for accuracy), so explanations naturally compound
+  - Explanations are skipped if speech is still playing, but the paired actions are still executed
+  - Actions are individual actions i.e. clicking a single dropdown and clicking an item within that dropdown are separate api calls (to maintain accuracy), so explanations naturally compound
 
+#### Other Options Considered
+
+| Architecture | Why I Chose/Rejected |
+|--------------|---------------------|
+| **ElevenLabsr** |  Natural voice quality, streaming support, reasonable cost |
+| **OpenAI TTS**  | Lower voice quality, no streaming in real-time |
 ---
 
-## Architecture Diagram
+## Limitations
 
-```mermaid
-flowchart LR
-    subgraph Input
-        A[User Speech] --> B[GPT-4o-mini-transcribe]
-        B --> C[Text Command]
-    end
+ - I based the agent on OpenHands architecture, would be interesting to see if the performance would increase if we included planning features as well.
+ - To decrease latency, some explanations are skipped, sometimes this leads to page changes that are left unexplained
+ - Each browser action is a single action (no multiaction), this is to maintain the best possible accuracy within tasks; however, it leads to slower output
+ - By separating browser actions, it leads to more api calls, to make this more cost effective, I would need to rely less on single actions or use a cheaper model (mostly tested with gpt-5.2)
 
-    subgraph BrowserAgent["Browser Agent"]
-        C --> D[Event Stream Agent<br/>OpenHands-based]
-        D <--> E[BrowserGym<br/>Orchestrator]
-        E <--> F[PlaywrightMCP<br/>DOM Access]
-        F <--> G[Browser]
-    end
 
-    subgraph Output
-        D --> H[Action + Explanation]
-        H --> I[ElevenLabs TTS]
-        I --> J[Audio Output]
-    end
-
-    style Input fill:#e1f5fe
-    style BrowserAgent fill:#fff3e0
-    style Output fill:#e8f5e9
-```
-
+## Future Work
+  - Hybrid vision fallback for canvas/complex widgets
+  - Voice activity detection to replace push-to-talk
+  - Multi-action batching for simple sequences
