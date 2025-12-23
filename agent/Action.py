@@ -47,6 +47,8 @@ class BrowserObservation(Observation):
     url: str = ""
     axtree_txt: str = ""
     error: str = ""
+    focused_element_bid: str = ""
+
     last_action_success: bool = True
     
     @property
@@ -130,7 +132,7 @@ class View:
                 if event.error:
                     content = f"❌ ERROR: {event.error}"
                 else:
-                    content = f"URL: {event.url}\n(Tree content hidden for brevity - see Current State)"
+                    content = f"URL: {event.url}\n Focused Element Bid: {event.focused_element_bid} \n Active Accessible Tree {event.axtree_txt}"
                 
                 context_lines.append(f"👀 OBSERVATION [{status}]:\n{content}")
                 context_lines.append("---")
@@ -167,3 +169,22 @@ class View:
 
     def is_repeating_actions(self) -> bool:
         return self.detect_loops() is not None
+    def get_loop_info(self) -> Optional[Tuple[List[str], int]]:
+        """Returns (pattern, repetition_count) if a loop is detected."""
+        actions = self.get_all_actions()
+        
+        for pattern_len in [2, 3, 4]:
+            if len(actions) >= pattern_len * 2:
+                pattern = actions[-pattern_len:]
+                count = 1
+                pos = len(actions) - pattern_len * 2
+                while pos >= 0:
+                    if actions[pos:pos+pattern_len] == pattern:
+                        count += 1
+                        pos -= pattern_len
+                    else:
+                        break
+                if count >= 2:
+                    return (pattern, count)
+        
+        return None

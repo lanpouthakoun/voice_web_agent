@@ -100,6 +100,7 @@ class State:
         """
         new_hash = self.compute_page_hash(obs_dict)
         new_url = obs_dict.get('url', '')
+        focused_bid = obs_dict.get('focused_element_bid', '')
         
         has_changed = (
             new_hash != self._last_page_hash or 
@@ -132,7 +133,8 @@ class State:
             url=new_url,
             axtree_txt=flatten_axtree_to_str(obs_dict.get('axtree_object', '')),
             error=error_msg,
-            last_action_success=action_success
+            last_action_success=action_success,
+            focused_element_bid = focused_bid
         )
 
     def is_stuck(self):

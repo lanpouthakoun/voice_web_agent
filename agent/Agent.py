@@ -274,7 +274,7 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
             print(f"❌ Environment error: {e}")
             raise e
 
-    def run(self, goal: str, on_complete: Optional[callable] = None):
+    def run(self, goal: str, max_steps = 50, on_complete: Optional[callable] = None):
         """Queue a goal to be executed (thread-safe)."""
         if self.speech:
             self.speech.stop()
@@ -337,7 +337,7 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
             Keep explanations to ONE short sentence.
             """
 
-    def get_prompt(self, state: State, goal: str) -> str:
+    def get_prompt(self, state: State) -> str:
         last_obs = state.get_last_observation()
         if not last_obs:
             return ""
