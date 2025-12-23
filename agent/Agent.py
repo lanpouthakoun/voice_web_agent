@@ -1,6 +1,6 @@
 import queue
 import threading
-from typing import Optional
+from typing import Optional, Tuple
 from dataclasses import dataclass
 
 
@@ -10,37 +10,23 @@ from browsergym.utils.obs import flatten_axtree_to_str
 from browsergym.core.action.highlevel import HighLevelActionSet
 from pydantic import BaseModel
 from agent.SpeechOutput import SpeechOutput
-from agent.state import State
+from agent.state import *
+from agent.Action import *
+
 
 class ReflectionFormat(BaseModel):
     what_went_wrong: str
     new_approach: str
+
+
 class OutputFormat(BaseModel):
     explanation: str
     code: str
 
 
 class IntentFormat(BaseModel):
-    understanding: str  # What the user actually wants
-    approach: str       # High-level strategy (1-2 sentences)
-
-CONCISE_INSTRUCTION = """\
-
-Here is another example with chain of thought of a valid action when providing a concise answer to user:
-"
-In order to accomplish my goal I need to send the information asked back to the user. This page list the information of HP Inkjet Fax Machine, which is the product identified in the objective. Its price is $279.49. I will send a message back to user with the answer.
-send_msg_to_user("$279.49")
-"
-
-IMPORTANT RULES:
-- Only send_msg_to_user when you have the COMPLETE answer to the goal.
-- If information is missing, navigate/click/search to find it first.
-- Never ask the user "if you want" or "would you like" - just do it.
-- Never send partial answers or say "I couldn't find" - keep trying.
-
-
-Make sure you have an explanation and an action.
-"""
+    understanding: str
+    approach: str
 
 
 @dataclass
@@ -58,17 +44,15 @@ class BrowserAgent:
         self.action_space = HighLevelActionSet(
             subsets=['chat', 'nav', 'bid'], 
             strict=False, 
-            multiaction=True
+            multiaction=False
         )
         self.obs = None
         
-        # Command queue for thread-safe communication
         self._command_queue = queue.Queue()
         self._stop_requested = False
         self._is_running = False
         self._lock = threading.Lock()
         
-        # Start dedicated agent thread
         self._agent_thread = threading.Thread(target=self._agent_loop, daemon=True)
         self._agent_thread.start()
 
@@ -80,6 +64,7 @@ class BrowserAgent:
             task_kwargs={'start_url': 'about:blank'},
             headless=False,
             tags_to_mark='standard_html',
+            timeout=3000
         )
         self.obs, _ = self.env.reset()
         print("✅ Browser ready!")
@@ -91,7 +76,7 @@ class BrowserAgent:
                 except queue.Empty:
                     continue
 
-                if command is None:  # Shutdown signal
+                if command is None:
                     break
 
                 self._execute_goal(command.goal, command.on_complete)
@@ -107,7 +92,11 @@ class BrowserAgent:
             model=self.llm,
             input=[{
                 "role": "system", 
-                "content": "You're about to help with a web task. Briefly describe your understanding and approach. Be conversational, like you're thinking out loud. Do NOT ask the user for permission or clarification - just complete the task"
+                "content": """You're about to help with a web task. Briefly describe your understanding and approach.
+
+Remember: Each browser action is separate. Typing into a field does NOT submit it.
+
+Be conversational. Do NOT ask the user for permission - just complete the task."""
             }, {
                 "role": "user", 
                 "content": f"Goal: {goal}"
@@ -124,16 +113,18 @@ class BrowserAgent:
 
         state = State(goal=goal)
         intent = self.get_intent(goal)
-        state.set_intent(intent)
-        state.set_obs(self.obs)
+        state.intent = intent
+        
         system_message = self.get_system_message(goal)
 
-        # Announce the goal
         print(f"\n🎯 New Goal: {goal}\n")
         if self.speech:
             self.speech.speak(intent.approach, wait=True)
-            
 
+        if self.obs:
+            initial_obs_event = state.update_from_observation(self.obs)
+            state.add_event(initial_obs_event)
+            
         try:
             for step_num in range(max_steps):
                 with self._lock:
@@ -145,33 +136,42 @@ class BrowserAgent:
 
                 print(f"\n--- Step {step_num + 1}/{max_steps} ---")
 
-                if state.get_errors() > 5:
+                if state.consecutive_errors > 5:
                     if self.speech:
-                        self.speech.speak("Too many errors. Stopping task.", wait=True)
+                        self.speech.speak("I'm having too much trouble. I'll stop here.", wait=True)
                     break
 
                 try:
                     done = self.step(state, goal, system_message)
+                    
                     if done:
                         print("\n✅ Goal accomplished!")
                         if on_complete:
                             on_complete(True)
                         return
+                        
                 except Exception as e:
                     print(f"⚠️  Step error: {e}")
-                    state.record_error()
+                    error_event = BrowserObservation(
+                        source=EventSource.ENVIRONMENT,
+                        error=f"System Exception: {str(e)}",
+                        last_action_success=False
+                    )
+                    state.add_event(error_event)
+                    
                     try:
                         self.obs, _ = self.env.reset()
-                        state.set_obs(self.obs)
+                        reset_event = state.update_from_observation(self.obs)
+                        state.add_event(reset_event)
                     except Exception as reset_error:
                         print(f"❌ Could not recover: {reset_error}")
                         if self.speech:
-                            self.speech.speak("Could not recover from error.", wait=True)
+                            self.speech.speak("I cannot recover the browser.", wait=True)
                         break
 
             print(f"\n⏰ Reached max steps ({max_steps})")
             if self.speech:
-                self.speech.speak("Reached maximum steps without completing the goal.", wait=True)
+                self.speech.speak("I reached the maximum number of steps without finishing.", wait=True)
             
         finally:
             with self._lock:
@@ -182,7 +182,14 @@ class BrowserAgent:
 
     def step(self, state: State, goal: str, system_message: str) -> bool:
         """Execute a single step with speech. Returns True if task is complete."""
+        
         prompt = self.get_prompt(state, goal)
+        
+        # Debug: print the history context
+        print("=" * 50)
+        print("HISTORY CONTEXT SENT TO LLM:")
+        print(state.view.get_prompt_context(max_events=10))
+        print("=" * 50)
 
         response = self.client.responses.parse(
             model=self.llm,
@@ -193,75 +200,71 @@ class BrowserAgent:
             text_format=OutputFormat,
         )
 
-        event = response.output_parsed
-        explanation = event.explanation
-        action = event.code.strip()
+        event_data = response.output_parsed
+        explanation = event_data.explanation
+        action_code = event_data.code.strip()
 
         print(f"💭 Thought: {explanation}")
-        print(f"🎬 Action: {action}")
+        print(f"🎬 Action: {action_code}")
 
-        # Check for incomplete send_msg_to_user
-        if "send_msg_to_user" in action:
+        # Validate and fix common action syntax errors
+        action_code, validation_error = self._validate_action(action_code)
+        if validation_error:
+            print(f"⚠️ Fixed action syntax: {validation_error}")
+
+        action_event = BrowserAction(
+            source=EventSource.AGENT,
+            thought=explanation,
+            code=action_code
+        )
+        state.add_event(action_event)
+
+        if "send_msg_to_user" in action_code:
             incomplete_phrases = [
                 "if you want", "would you like", "do you want",
                 "let me know", "I can't see", "I couldn't find", "should I"
             ]
-            if any(phrase in action.lower() for phrase in incomplete_phrases):
-                print("⚠️  Rejecting incomplete response - need more info")
+            if any(phrase in action_code.lower() for phrase in incomplete_phrases):
+                print("⚠️  Rejecting incomplete response")
                 if self.speech:
-                    self.speech.speak("I need more information. Trying again.", wait=True)
-                state.record_error()
+                    self.speech.speak("I need to find more information first.", wait=True)
+                
+                error_event = BrowserObservation(
+                    source=EventSource.ENVIRONMENT,
+                    error="Action Rejected: You tried to ask the user a question. Complete the task yourself.",
+                    last_action_success=False
+                )
+                state.add_event(error_event)
                 return False
 
-        # Start speaking the explanation asynchronously
         speech_thread = None
         if self.speech:
             speech_thread = self.speech.speak_async(explanation)
 
-        # Execute the action while speech plays
-        state.add_action(action)
-
         try:
-            self.obs, reward, done, truncated, info = self.env.step(action)
-            # Check for explicit error
-            error = self.obs.get('last_action_error', '')
-            if error:
-                print(f"⚠️ Action error: {error}")
-                state.record_error()
-            else:
-                # NEW: Check if page actually changed
-                if state.check_page_changed(self.obs):
-                    print("✅ Page updated")
-                    state.record_success()
-                    state.record_change()
-                else:
-                    print("⚠️ No page change detected - action may have failed silently")
-                    state.record_no_change()
-            
-            state.set_obs(self.obs)
+            self.obs, reward, done, truncated, info = self.env.step(action_code)
 
-            error = self.obs.get('last_action_error', '')
-            if error:
-                print(f"⚠️  Action error: {error}")
-                state.record_error()
-            else:
-                state.record_success()
+            obs_event = state.update_from_observation(self.obs)
+            state.add_event(obs_event)
 
-            # Wait for speech to complete before next step
+            if obs_event.error:
+                print(f"⚠️ Action error: {obs_event.error}")
+            elif not obs_event.last_action_success:
+                 print("⚠️ No page change detected")
+            else:
+                 print("✅ Page updated")
+
             if speech_thread and speech_thread.is_alive():
                 speech_thread.join()
 
-            # Check if done
-            if done or "send_msg_to_user" in action:
-                # Extract and speak the message sent to user
-                if "send_msg_to_user" in action and self.speech:
+            if done or "send_msg_to_user" in action_code:
+                if "send_msg_to_user" in action_code and self.speech:
                     try:
-                        # Extract message from action like: send_msg_to_user("message here")
                         import re
-                        match = re.search(r'send_msg_to_user\(["\'](.+?)["\']\)', action, re.DOTALL)
+                        match = re.search(r'send_msg_to_user\(["\'](.+?)["\']\)', action_code, re.DOTALL)
                         if match:
                             message = match.group(1)
-                            self.speech.speak(f"Here's what I found: {message}", wait=True)
+                            self.speech.speak(f"Here is what I found: {message}", wait=True)
                     except:
                         pass
                 return True
@@ -269,20 +272,16 @@ class BrowserAgent:
             return False
 
         except Exception as e:
-            # Wait for speech even on error
             if speech_thread and speech_thread.is_alive():
                 speech_thread.join()
             print(f"❌ Environment error: {e}")
-            state.record_error()
-            raise
+            raise e
 
     def run(self, goal: str, max_steps: int = 50, on_complete: Optional[callable] = None):
         """Queue a goal to be executed (thread-safe)."""
-        # Stop any current speech
         if self.speech:
             self.speech.stop()
 
-        # Clear any pending commands
         while not self._command_queue.empty():
             try:
                 self._command_queue.get_nowait()
@@ -305,86 +304,193 @@ class BrowserAgent:
 
     def get_system_message(self, goal: str) -> str:
         return f"""\
-# Instructions
-Review the current state of the page and all other information to find the best
-possible next action to accomplish your goal. Your answer will be interpreted
-and executed by a program, make sure to follow the formatting instructions.
+# Browser Automation Agent
 
-IMPORTANT:
-- Complete the ENTIRE task before sending a message to the user.
-- Do NOT ask the user for permission or clarification - just complete the task.
-- Only use send_msg_to_user() when you have ALL the information requested.
-- If you need more information, take actions to get it (click, navigate, search).
+You control a web browser ONE ACTION AT A TIME. After each action, you see the result.
 
-When explaining your actions, speak naturally like you're thinking out loud:
-- BAD: "In order to accomplish my goal I need to click the search button"
-- GOOD: "Let me search for that..." or "I'll click on this coffee shop to see the reviews"
+## Actions - EXACT SYNTAX (ONE per turn)
+```
+fill('bid', 'text')        # Types text into field. DOES NOT SUBMIT.
+click('bid')               # Clicks an element
+press('Enter')             # Press a key (after fill to submit)
+goto('https://url.com')    # Navigate to URL
+scroll(0, 500)             # Scroll down (positive y = down)
+send_msg_to_user('msg')    # Return final answer to user
+```
 
-Keep explanations to ONE short sentence. Sound like a helpful friend, not a robot.
+## SYNTAX RULES - IMPORTANT
+- bid and text must be in QUOTES: fill('123', 'hello') ✓
+- fill() takes EXACTLY 2 arguments: fill('bid', 'text') ✓
+- DO NOT add extra parameters: fill('123', 'hello', true) ✗ WRONG
+- scroll() takes 2 numbers (no quotes): scroll(0, 500) ✓
 
-# Goal:
+## Workflow Patterns
+**Search:** fill('searchbox_id', 'query') → click('search_btn_id') or press('Enter')
+**Form:** fill('field1', 'value1') → fill('field2', 'value2') → click('submit_btn')
+
+## CRITICAL RULES
+1. fill() only types text - you MUST click a button or press Enter to submit
+2. Use exact bid values from the accessibility tree
+3. If action fails, try a DIFFERENT element - don't repeat
+4. Look for modals/popups blocking the page
+
+## Your Goal
 {goal}
 
-# Action Space
-{self.action_space.describe(with_long_description=False, with_examples=True)}
+Keep explanations to ONE short sentence.
 """
+
     def get_prompt(self, state: State, goal: str) -> str:
-        if state.obs is None:
+        last_obs = state.get_last_observation()
+        if not last_obs:
             return ""
 
-        obs = state.get_obs()
-        cur_axtree_txt = flatten_axtree_to_str(obs['axtree_object'])
-        cur_url = obs['url']
-        error_prefix = obs.get('last_action_error', '')
+        cur_axtree_txt = last_obs.axtree_txt
+        cur_url = last_obs.url
+        error_prefix = last_obs.error
+
+        # Get history context (includes loop detection)
+        history_context = state.view.get_prompt_context(max_events=10)
 
         prompt = f"""
-{f'# Previous Action Error: {error_prefix}' if error_prefix else ''}
+# Current Browser State
 
-# Current Page URL:
+## URL
 {cur_url}
 
-# Current Accessibility Tree:
+## Last Action Result
+{self._format_last_result(state)}
+
+## Action History
+{history_context}
+
+## Current Page Elements (Accessibility Tree)
+Use these IDs (bid) for your actions:
 {cur_axtree_txt}
-
-# Previous Actions:
-{' | '.join(state.get_actions()[-5:]) if state.get_actions() else 'None'}
-
-
-
 """.strip()
-        prompt += f"""Intent: \n 
-{state.get_intent().approach}"""
 
-        prompt += CONCISE_INSTRUCTION
+        if state.intent:
+            prompt += f"\n\n## Your Plan: {state.intent.approach}"
 
-        if state.is_stuck() > 3:
-            print("===============IN ERROR==============")
-            reflection = self.reflect_on_failure(state, error_prefix)
+        # Add instructions
+        prompt += """
+
+## Instructions
+- Pick ONE action based on the accessibility tree above
+- Use the exact bid from the tree
+- fill() just types text - remember to click submit or press Enter after
+- Only send_msg_to_user() when you have the COMPLETE answer
+"""
+
+        # Extra warning if stuck
+        if state.is_stuck():
+            print("=============== STUCK DETECTED ==============")
+            
+            # Get loop info for specific guidance
+            loop_info = state.view.get_loop_info()
             
             prompt += f"""
 
-⚠️  WARNING: You are failing this task. Try this new approach: {reflection.new_approach}
+🚨 YOU ARE STUCK - STOP REPEATING YOURSELF 🚨
 
-DO NOT send_msg_to_user until you have ALL requested information.
+You have been repeating actions that aren't working.
+{f"Repeated pattern: {' → '.join(loop_info[0])}" if loop_info else ""}
+
+MANDATORY: Try something COMPLETELY DIFFERENT:
+1. Look at the accessibility tree - find a DIFFERENT element
+2. Is there a modal/popup blocking? Look for "Close", "X", or "Dismiss"
+3. Is this a date picker? Look for "Done" or "Apply" button
+4. Did you fill a search box? Look for a search BUTTON to click
+5. Scroll to find elements you haven't seen
+
+DO NOT repeat any action you've already tried.
 """
         return prompt
 
+    def _format_last_result(self, state: State) -> str:
+        """Format the last action's result clearly."""
+        last_action = state.get_last_action()
+        last_obs = state.get_last_observation()
+        
+        if not last_action:
+            return "No previous action (starting fresh)"
+        
+        result = f"Action: `{last_action.code}`\n"
+        
+        if last_obs:
+            if last_obs.error:
+                result += f"❌ FAILED: {last_obs.error}"
+            elif last_obs.last_action_success:
+                result += f"✓ SUCCESS"
+                if "fill(" in last_action.code:
+                    result += "\n⚠️ Text was typed but NOT submitted. Click a button or press Enter to submit."
+            else:
+                result += "⚠️ NO CHANGE: Action may not have worked"
+        
+        return result
+
+    def _validate_action(self, action_code: str) -> Tuple[str, Optional[str]]:
+        """
+        Validate and fix common action syntax errors.
+        Returns (fixed_action, error_message) or (original_action, None) if valid.
+        """
+        import re
+        original = action_code
+        error_msg = None
+        
+        # Fix fill() with 3 arguments (remove the third)
+        # fill('123', 'text', true) -> fill('123', 'text')
+        fill_match = re.match(r"fill\s*\(\s*(['\"][^'\"]+['\"])\s*,\s*(['\"][^'\"]*['\"])\s*,\s*\w+\s*\)", action_code)
+        if fill_match:
+            action_code = f"fill({fill_match.group(1)}, {fill_match.group(2)})"
+            error_msg = f"Removed extra argument from fill(): {original} -> {action_code}"
+        
+        # Fix fill() with unquoted bid
+        # fill(123, 'text') -> fill('123', 'text')
+        fill_unquoted = re.match(r"fill\s*\(\s*(\d+)\s*,\s*(['\"].+['\"])\s*\)", action_code)
+        if fill_unquoted:
+            action_code = f"fill('{fill_unquoted.group(1)}', {fill_unquoted.group(2)})"
+            error_msg = f"Added quotes to bid: {original} -> {action_code}"
+        
+        # Fix click() with unquoted bid
+        # click(123) -> click('123')
+        click_unquoted = re.match(r"click\s*\(\s*(\d+)\s*\)", action_code)
+        if click_unquoted:
+            action_code = f"click('{click_unquoted.group(1)}')"
+            error_msg = f"Added quotes to bid: {original} -> {action_code}"
+        
+        # Fix press() with wrong quotes or format
+        # press(Enter) -> press('Enter')
+        press_unquoted = re.match(r"press\s*\(\s*(\w+)\s*\)", action_code)
+        if press_unquoted and not action_code.startswith("press('") and not action_code.startswith('press("'):
+            action_code = f"press('{press_unquoted.group(1)}')"
+            error_msg = f"Added quotes to key: {original} -> {action_code}"
+        
+        return action_code, error_msg
+
     def reflect_on_failure(self, state: State, last_error: str) -> str:
+        recent_history = state.view.get_prompt_context(max_events=5)
         
         response = self.client.beta.chat.completions.parse(
             model=self.llm,
             input=[{
                 "role": "system",
-                "content": "The last few actions failed. Briefly reflect on what's not working and suggest a different approach. Be honest and conversational."
+                "content": """Analyze why the browser automation is stuck. Common issues:
+1. Typed into a field but forgot to click submit or press Enter
+2. Using wrong element ID
+3. A modal/popup/datepicker is open and blocking
+4. Need to click a "Done" or "Apply" button
+5. Element not visible - need to scroll
+
+Be specific about what to try differently."""
             }, {
                 "role": "user", 
-                "content": f"Goal: {state.goal}\nRecent actions: {state.get_actions()[-3:]}\nLast error: {last_error}. If no error, our actions have not been changing the page."
+                "content": f"Goal: {state.goal}\n\nRecent Actions:\n{recent_history}\n\nLast error: {last_error}"
             }],
             text_format=ReflectionFormat
         )
         reflection = response.choices[0].message.parsed
         
-        # Speak the reflection
         if self.speech:
             self.speech.speak(f"Hmm, that's not working. {reflection.new_approach}", wait=True)
         
