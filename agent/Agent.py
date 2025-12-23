@@ -47,6 +47,7 @@ class BrowserAgent:
             multiaction=True
         )
         self.obs = None
+        self.speech_thread = None
         
         self._command_queue = queue.Queue()
         self._stop_requested = False
@@ -233,10 +234,27 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
                 )
                 state.add_event(error_event)
                 return False
+        if "send_msg_to_user" in action_code:
+            if "send_msg_to_user" in action_code and self.speech:
+                try:
+                    import re
+                    match = re.search(r'send_msg_to_user\(["\'](.+?)["\']\)', action_code, re.DOTALL)
+                    if match:
+                        message = match.group(1)
+                        self.speech.speak(f"Here is what I found: {message}", wait=True)
+                except:
+                    pass
+            return True
 
-        speech_thread = None
+        
         if self.speech:
-            speech_thread = self.speech.speak(explanation, wait = True)
+            # Check if the previous thought is still being spoken
+            if self.speech_thread and self.speech_thread.is_alive():
+                print(f"🙊 Skipping speech (Previous still active): '{explanation}'")
+                # We do NOT update self.speech_thread here; we let the old one finish
+            else:
+                # Channel is clear, start speaking
+                self.speech_thread = self.speech.speak(explanation, wait = False)
 
         try:
             self.obs, reward, done, truncated, info = self.env.step(action_code)
@@ -251,20 +269,7 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
             else:
                  print("✅ Page updated")
 
-            # if speech_thread and speech_thread.is_alive():
-            #     speech_thread.join()
-
-            if done or "send_msg_to_user" in action_code:
-                if "send_msg_to_user" in action_code and self.speech:
-                    try:
-                        import re
-                        match = re.search(r'send_msg_to_user\(["\'](.+?)["\']\)', action_code, re.DOTALL)
-                        if match:
-                            message = match.group(1)
-                            self.speech.speak(f"Here is what I found: {message}", wait=True)
-                    except:
-                        pass
-                return True
+            
 
             return False
 
