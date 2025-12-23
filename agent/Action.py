@@ -3,6 +3,7 @@ from enum import Enum
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 from collections import Counter
+import re
 
 
 class EventSource(str, Enum):
@@ -61,8 +62,9 @@ class View:
     Renders event history into prompts for the LLM.
     """
     
-    def __init__(self, history: List[Event]):
+    def __init__(self, history: List[Event], scratchpad: str):
         self.history = history
+        self.scratchpad = scratchpad
 
     def get_prompt_context(self, max_events: int = 10) -> str:
         """
@@ -77,6 +79,9 @@ class View:
         lines.append("## CURRENT BROWSER STATE")
         lines.append(current_state)
         lines.append("")
+
+        lines.append("## CURRENT SCRATCHPAD (Your notes)")
+        lines.append(self.scratchpad)
         
         loop_warning = self.detect_loops()
         if loop_warning:
@@ -86,6 +91,8 @@ class View:
         lines.append("## EXECUTION HISTORY")
         recent_context = self.format_trajectory(max_events)
         lines.append(recent_context)
+        print("## Current Scratchpad")
+        print(self.scratchpad)
         
         return "\n".join(lines)
 
@@ -132,7 +139,7 @@ class View:
                 if event.error:
                     content = f"❌ ERROR: {event.error}"
                 else:
-                    content = f"URL: {event.url}\n Focused Element Bid: {event.focused_element_bid} \n Active Accessible Tree {event.axtree_txt}"
+                    content = f"URL: {event.url}\n Focused Element Area: {self.summarize_observation(event)} \n"
                 
                 context_lines.append(f"👀 OBSERVATION [{status}]:\n{content}")
                 context_lines.append("---")
@@ -142,6 +149,29 @@ class View:
                 context_lines.append("---")
         
         return "\n".join(context_lines)
+
+    def summarize_observation(self, obs: BrowserObservation) -> str:
+        lines = obs.axtree_txt.split('\n')
+        summary_lines = []
+        
+        focus_idx = -1
+        if obs.focused_element_bid:
+            for i, line in enumerate(lines):
+                if f"[{obs.focused_element_bid}]" in line:
+                    focus_idx = i
+                    break
+        
+        
+        if focus_idx != -1:
+            local_context = lines[focus_idx : focus_idx + 15]
+            
+            for line in local_context:
+                clean = re.sub(r'^\[\d+\]\s*', '', line).strip()
+                if clean and clean not in ["image", "button", "link", "''"]:
+                    summary_lines.append(f"  > {clean}")
+
+        unique_lines = list(dict.fromkeys(summary_lines))
+        return "\n".join(unique_lines[:15])
 
     def detect_loops(self) -> Optional[str]:
         """Detect if agent is stuck in a loop and return a warning."""

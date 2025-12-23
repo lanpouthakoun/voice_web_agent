@@ -21,6 +21,7 @@ class ReflectionFormat(BaseModel):
 class OutputFormat(BaseModel):
     explanation: str
     code: str
+    scratchpad: str
 
 class IntentFormat(BaseModel):
     understanding: str
@@ -178,12 +179,6 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
         """Execute a single step with speech. Returns True if task is complete."""
         
         prompt = self.get_prompt(state)
-        
-        # Debug: print the history context
-        print("=" * 50)
-        print("HISTORY CONTEXT SENT TO LLM:")
-        print(state.view.get_prompt_context(max_events=10))
-        print("=" * 50)
 
         response = self.client.responses.parse(
             model=self.llm,
@@ -193,10 +188,11 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
             ],
             text_format=OutputFormat,
         )
-
+        
         event_data = response.output_parsed
         explanation = event_data.explanation
         action_code = event_data.code.strip()
+        new_notes = event_data.scratchpad
 
         print(f"Thought: {explanation}")
         print(f"Action: {action_code}")
@@ -211,6 +207,8 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
             code=action_code
         )
         state.add_event(action_event)
+        if new_notes:
+            state.add_note(new_notes)
 
         if "send_msg_to_user" in action_code:
             incomplete_phrases = [
@@ -321,6 +319,15 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
             - DO NOT add extra parameters: fill('123', 'hello', true) ✗ WRONG
             - scroll() takes 2 numbers (no quotes): scroll(0, 500) ✓
 
+            ## OUTPUT FORMAT
+            You must respond with this exact structure:
+            - **explanation**: A short, one-sentence justification for your action.
+            - **code**: The specific action syntax (e.g., `click('55')`).
+            - **scratchpad**: THIS IS YOUR MEMORY. Anything you write here gets SAVED to your permanent scratchpad. 
+                - Use this to record data you found (e.g., "Found Price of flight: $300").
+                - If you have no new data to save, leave this empty string "".
+                - DO NOT repeat previous items on your scratchpad; just add NEW findings.
+
             ## Workflow Patterns
             **Search:** fill('searchbox_id', 'query') → click('search_btn_id') or press('Enter')
             **Form:** fill('field1', 'value1') → fill('field2', 'value2') → click('submit_btn')
@@ -333,8 +340,6 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
 
             ## Your Goal
             {goal}
-
-            Keep explanations to ONE short sentence.
             """
 
     def get_prompt(self, state: State) -> str:

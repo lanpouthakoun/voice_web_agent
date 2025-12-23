@@ -48,6 +48,7 @@ class IntentFormat(BaseModel):
 class State:
     history: List[Event] = field(default_factory=list)
     inputs: Dict[str, Any] = field(default_factory=dict)
+    scratchpad: str = ""
     
     goal: str = ""
     intent: Optional[IntentFormat] = None
@@ -68,7 +69,7 @@ class State:
         """
         current_checksum = len(self.history)
         if current_checksum != self._history_checksum:
-            self._view = View(self.history)
+            self._view = View(self.history, self.scratchpad)
             self._history_checksum = current_checksum
         return self._view
 
@@ -86,6 +87,12 @@ class State:
             if isinstance(event, BrowserAction):
                 return event
         return None
+
+    def add_note(self, note):
+        self.scratchpad += f"\n {note}"
+    
+    def get_scratchpad(self):
+        return self.scratchpad
 
 
     def compute_page_hash(self, obs_dict: dict) -> str:
