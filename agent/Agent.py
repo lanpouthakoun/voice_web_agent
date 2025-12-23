@@ -14,10 +14,6 @@ from agent.state import *
 from agent.Action import *
 
 
-class ReflectionFormat(BaseModel):
-    what_went_wrong: str
-    new_approach: str
-
 class OutputFormat(BaseModel):
     explanation: str
     code: str
@@ -92,10 +88,52 @@ class BrowserAgent:
                 "role": "system", 
                 "content": """You're about to help with a web task. Briefly describe your understanding and approach.
 
-Be conversational. Do NOT ask the user for permission - just complete the task."""
+                    Be conversational. Do NOT ask the user for permission - just complete the task."""
             }, {
                 "role": "user", 
                 "content": f"Goal: {goal}"
+            }],
+            text_format=IntentFormat,
+        )
+        return response.output_parsed
+    
+    def rewrite_plan(self, new_information: str):
+        state = self.current_state
+        history_str = state.view.get_prompt_context(max_events=10)
+        current_approach = state.intent.approach if state.intent else "Starting fresh"
+        
+        response = self.client.responses.parse(
+            model=self.llm,
+            input=[{
+                "role": "system", 
+                "content": f"""
+                You are a Browser Automation Agent. 
+                You are in the middle of a task, but the user has issued a INTERRUPTION with new instructions.
+
+                # Current Context
+                **Original Goal:** "{state.goal}"
+                **Current Approach:** "{current_approach}"
+                
+                # Recent Action History (What you have already done)
+                {history_str}
+
+                # Your Task
+                The user has provided NEW INFORMATION. You must update your 'Understanding' and 'Approach'.
+                
+                1. **Compare**: How does the new info change the original goal?
+                2. **Evaluate History**: Look at the history. 
+                   - If the new info contradicts what you've already done, your new approach must explicitly say to go back or fix it.
+                   - If the new info is just an add-on (e.g. "also make it red"), append it to the current plan without restarting.
+                3. **Output**: A conversational summary of the NEW plan.
+
+                # Output Rules
+                - **understanding**: Merge the old goal + new info into one clear objective.
+                - **approach**: A step-by-step plan focusing on what to do *next*.
+                - Be concise and direct.
+                """
+            }, {
+                "role": "user", 
+                "content": f"New Information/Correction: {new_information}"
             }],
             text_format=IntentFormat,
         )
@@ -110,16 +148,13 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
             if self._is_running and self.current_state:
                 print(f"UPDATE: Adding to existing goal: '{new_goal_text}'")
                 
-               
                 
                 self.current_state.add_note(f"USER NOTE: {new_goal_text}")
-                
-                if self.speech:
-                    self.speech.stop(mute=True)
-                    
-                   
+                new_intent = self.rewrite_plan(new_goal_text)
+                self.current_state.intent = new_intent.approach
+                if self.speech:                    
                     self.speech.speak(
-                        f"Okay, let me add that to the plan.", 
+                        f"{new_intent.approach}", 
                         wait=True, 
                         ignore_mute=True
                     )
@@ -369,6 +404,10 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
 
             ## Your Goal
             {goal}
+
+            ## Your plan
+            {self.current_state.intent.approach}
+            # IMPORTANT - You must fulfill all tasks outlined in your plan.
             """
 
     def get_prompt(self, state: State) -> str:
@@ -393,9 +432,6 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
             ## Current Page Elements (Accessibility Tree)
             {cur_axtree_txt}
             """.strip()
-
-        if state.intent:
-            prompt = f"\n\n## Your Original Plan: {state.intent.approach}." + prompt
 
         if state.is_stuck():
             loop_info = state.view.get_loop_info()
@@ -451,34 +487,6 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
             error_msg = f"Added quotes to key: {original} -> {action_code}"
         
         return action_code, error_msg
-
-    def reflect_on_failure(self, state: State, last_error: str) -> str:
-        recent_history = state.view.get_prompt_context(max_events=5)
-        
-        response = self.client.beta.chat.completions.parse(
-            model=self.llm,
-            input=[{
-                "role": "system",
-                "content": """Analyze why the browser automation is stuck. Common issues:
-                        1. Typed into a field but forgot to click submit or press Enter
-                        2. Using wrong element ID
-                        3. A modal/popup/datepicker is open and blocking
-                        4. Need to click a "Done" or "Apply" button
-                        5. Element not visible - need to scroll
-
-                        Be specific about what to try differently."""
-            }, {
-                "role": "user", 
-                "content": f"Goal: {state.goal}\n\n Original Intent: {state.intent}\n\nRecent Actions:\n{recent_history}\n\nLast error: {last_error}"
-            }],
-            text_format=ReflectionFormat
-        )
-        reflection = response.choices[0].message.parsed
-        
-        if self.speech:
-            self.speech.speak(f"Hmm, that's not working. {reflection.new_approach}", wait=True)
-        
-        return reflection.new_approach
 
     def cleanup(self):
         self._command_queue.put(None)
