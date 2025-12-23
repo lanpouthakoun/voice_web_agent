@@ -164,6 +164,8 @@ The agent consists of three main components: speech-to-text, a browser agent, an
  - Each browser action is a single action (no multiaction), this is to maintain the best possible accuracy within tasks; however, it leads to slower output
  - By separating browser actions, it leads to more api calls, to make this more cost effective, I would need to rely less on single actions or use a cheaper model (mostly tested with gpt-5.2)
  - Some of the explanations aren't directly suited for voice agents. Could be better prompted.
+ - Playwright has a weird window sizing error. Likely a simple fix.
+
 
 
 ## Future Work
@@ -172,4 +174,5 @@ The agent consists of three main components: speech-to-text, a browser agent, an
   - Multi-action batching for simple sequences
   - 
 ## Demo
-[Watch the demo](https://www.loom.com/share/c97a9b31ff374b06bc4ec9792dfcc870)
+[Watch the demo](https://www.loom.com/share/069e9393c3054117b9d4d769f60539cc)
+
