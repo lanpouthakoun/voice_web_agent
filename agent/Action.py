@@ -253,11 +253,9 @@ This action is not achieving your goal. Try a DIFFERENT approach:
         if len(actions) < 4:
             return False
         
-        # Check for 2-action loop
         if actions[-2:] == actions[-4:-2]:
             return True
         
-        # Check for same action 3+ times in last 5
         if len(actions) >= 5:
             last_5 = actions[-5:]
             counts = Counter(last_5)
@@ -273,7 +271,6 @@ This action is not achieving your goal. Try a DIFFERENT approach:
         for pattern_len in [2, 3, 4]:
             if len(actions) >= pattern_len * 2:
                 pattern = actions[-pattern_len:]
-                # Count how many times this pattern appears at the end
                 count = 1
                 pos = len(actions) - pattern_len * 2
                 while pos >= 0:

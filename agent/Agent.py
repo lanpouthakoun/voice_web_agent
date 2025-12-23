@@ -44,7 +44,7 @@ class BrowserAgent:
         self.action_space = HighLevelActionSet(
             subsets=['chat', 'nav', 'bid'], 
             strict=False, 
-            multiaction=False
+            multiaction=True
         )
         self.obs = None
         
@@ -94,8 +94,6 @@ class BrowserAgent:
                 "role": "system", 
                 "content": """You're about to help with a web task. Briefly describe your understanding and approach.
 
-Remember: Each browser action is separate. Typing into a field does NOT submit it.
-
 Be conversational. Do NOT ask the user for permission - just complete the task."""
             }, {
                 "role": "user", 
@@ -117,7 +115,6 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
         
         system_message = self.get_system_message(goal)
 
-        print(f"\n🎯 New Goal: {goal}\n")
         if self.speech:
             self.speech.speak(intent.approach, wait=True)
 
@@ -239,7 +236,7 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
 
         speech_thread = None
         if self.speech:
-            speech_thread = self.speech.speak_async(explanation)
+            speech_thread = self.speech.speak(explanation, wait = True)
 
         try:
             self.obs, reward, done, truncated, info = self.env.step(action_code)
@@ -254,8 +251,8 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
             else:
                  print("✅ Page updated")
 
-            if speech_thread and speech_thread.is_alive():
-                speech_thread.join()
+            # if speech_thread and speech_thread.is_alive():
+            #     speech_thread.join()
 
             if done or "send_msg_to_user" in action_code:
                 if "send_msg_to_user" in action_code and self.speech:
@@ -370,13 +367,13 @@ Use these IDs (bid) for your actions:
 """.strip()
 
         if state.intent:
-            prompt += f"\n\n## Your Plan: {state.intent.approach}"
+            prompt += f"\n\n## Your Original Plan: {state.intent.approach}"
 
         # Add instructions
         prompt += """
 
 ## Instructions
-- Pick ONE action based on the accessibility tree above
+- Pick at most THREE actions based on the accessibility tree above
 - Use the exact bid from the tree
 - fill() just types text - remember to click submit or press Enter after
 - Only send_msg_to_user() when you have the COMPLETE answer
