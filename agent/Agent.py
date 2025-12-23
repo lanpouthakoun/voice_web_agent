@@ -18,16 +18,13 @@ class ReflectionFormat(BaseModel):
     what_went_wrong: str
     new_approach: str
 
-
 class OutputFormat(BaseModel):
     explanation: str
     code: str
 
-
 class IntentFormat(BaseModel):
     understanding: str
     approach: str
-
 
 @dataclass
 class AgentCommand:
@@ -54,12 +51,11 @@ class BrowserAgent:
         self._is_running = False
         self._lock = threading.Lock()
         
-        self._agent_thread = threading.Thread(target=self._agent_loop, daemon=True)
+        self._agent_thread = threading.Thread(target=self.agent_loop, daemon=True)
         self._agent_thread.start()
 
-    def _agent_loop(self):
+    def agent_loop(self):
         """Main loop running on dedicated thread - browser lives here."""
-        print("🌐 Starting browser...")
         self.env = gym.make(
             'browsergym/openended',
             task_kwargs={'start_url': 'about:blank'},
@@ -80,7 +76,7 @@ class BrowserAgent:
                 if command is None:
                     break
 
-                self._execute_goal(command.goal, command.on_complete)
+                self.execute_goal(command.goal, command.on_complete)
 
             except Exception as e:
                 print(f"❌ Agent loop error: {e}")
@@ -104,7 +100,7 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
         )
         return response.output_parsed
 
-    def _execute_goal(self, goal: str, on_complete: Optional[callable] = None, max_steps: int = 50):
+    def execute_goal(self, goal: str, on_complete: Optional[callable] = None, max_steps: int = 50):
         """Execute a goal - runs on agent thread."""
         with self._lock:
             self._stop_requested = False
@@ -140,7 +136,7 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
                     break
 
                 try:
-                    done = self.step(state, goal, system_message)
+                    done = self.step(state, system_message)
                     
                     if done:
                         print("\n✅ Goal accomplished!")
@@ -178,10 +174,10 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
                 on_complete(False)
             print("\n🎤 Ready for next voice command. Press Option to speak...")
 
-    def step(self, state: State, goal: str, system_message: str) -> bool:
+    def step(self, state: State, system_message: str) -> bool:
         """Execute a single step with speech. Returns True if task is complete."""
         
-        prompt = self.get_prompt(state, goal)
+        prompt = self.get_prompt(state)
         
         # Debug: print the history context
         print("=" * 50)
@@ -202,11 +198,10 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
         explanation = event_data.explanation
         action_code = event_data.code.strip()
 
-        print(f"💭 Thought: {explanation}")
-        print(f"🎬 Action: {action_code}")
+        print(f"Thought: {explanation}")
+        print(f"Action: {action_code}")
 
-        # Validate and fix common action syntax errors
-        action_code, validation_error = self._validate_action(action_code)
+        action_code, validation_error = self.validate_action(action_code)
         if validation_error:
             print(f"⚠️ Fixed action syntax: {validation_error}")
 
@@ -274,12 +269,12 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
             return False
 
         except Exception as e:
-            if speech_thread and speech_thread.is_alive():
-                speech_thread.join()
+            if self.speech_thread and self.speech_thread.is_alive():
+                self.speech_thread.join()
             print(f"❌ Environment error: {e}")
             raise e
 
-    def run(self, goal: str, max_steps: int = 50, on_complete: Optional[callable] = None):
+    def run(self, goal: str, on_complete: Optional[callable] = None):
         """Queue a goal to be executed (thread-safe)."""
         if self.speech:
             self.speech.stop()
@@ -306,41 +301,41 @@ Be conversational. Do NOT ask the user for permission - just complete the task."
 
     def get_system_message(self, goal: str) -> str:
         return f"""\
-# Browser Automation Agent
+            # Browser Automation Agent
 
-You control a web browser ONE ACTION AT A TIME. After each action, you see the result.
+            You control a web browser ONE ACTION AT A TIME. After each action, you see the result.
 
-## Actions - EXACT SYNTAX (ONE per turn)
-```
-fill('bid', 'text')        # Types text into field. DOES NOT SUBMIT.
-click('bid')               # Clicks an element
-press('Enter')             # Press a key (after fill to submit)
-goto('https://url.com')    # Navigate to URL
-scroll(0, 500)             # Scroll down (positive y = down)
-send_msg_to_user('msg')    # Return final answer to user
-```
+            ## Actions - EXACT SYNTAX (ONE per turn)
+            ```
+            fill('bid', 'text')        # Types text into field. DOES NOT SUBMIT.
+            click('bid')               # Clicks an element
+            press('Enter')             # Press a key (after fill to submit)
+            goto('https://url.com')    # Navigate to URL
+            scroll(0, 500)             # Scroll down (positive y = down)
+            send_msg_to_user('msg')    # Return final answer to user
+            ```
 
-## SYNTAX RULES - IMPORTANT
-- bid and text must be in QUOTES: fill('123', 'hello') ✓
-- fill() takes EXACTLY 2 arguments: fill('bid', 'text') ✓
-- DO NOT add extra parameters: fill('123', 'hello', true) ✗ WRONG
-- scroll() takes 2 numbers (no quotes): scroll(0, 500) ✓
+            ## SYNTAX RULES - IMPORTANT
+            - bid and text must be in QUOTES: fill('123', 'hello') ✓
+            - fill() takes EXACTLY 2 arguments: fill('bid', 'text') ✓
+            - DO NOT add extra parameters: fill('123', 'hello', true) ✗ WRONG
+            - scroll() takes 2 numbers (no quotes): scroll(0, 500) ✓
 
-## Workflow Patterns
-**Search:** fill('searchbox_id', 'query') → click('search_btn_id') or press('Enter')
-**Form:** fill('field1', 'value1') → fill('field2', 'value2') → click('submit_btn')
+            ## Workflow Patterns
+            **Search:** fill('searchbox_id', 'query') → click('search_btn_id') or press('Enter')
+            **Form:** fill('field1', 'value1') → fill('field2', 'value2') → click('submit_btn')
 
-## CRITICAL RULES
-1. fill() only types text - you MUST click a button or press Enter to submit
-2. Use exact bid values from the accessibility tree
-3. If action fails, try a DIFFERENT element - don't repeat
-4. Look for modals/popups blocking the page
+            ## CRITICAL RULES
+            1. fill() only types text - you MUST click a button or press Enter to submit
+            2. Use exact bid values from the accessibility tree
+            3. If action fails, try a DIFFERENT element - don't repeat
+            4. Look for modals/popups blocking the page
 
-## Your Goal
-{goal}
+            ## Your Goal
+            {goal}
 
-Keep explanations to ONE short sentence.
-"""
+            Keep explanations to ONE short sentence.
+            """
 
     def get_prompt(self, state: State, goal: str) -> str:
         last_obs = state.get_last_observation()
@@ -350,87 +345,49 @@ Keep explanations to ONE short sentence.
         cur_axtree_txt = last_obs.axtree_txt
         cur_url = last_obs.url
 
-        # Get history context (includes loop detection)
         history_context = state.view.get_prompt_context(max_events=15)
 
         prompt = f"""
-# Current Browser State
+            # Current Browser State
 
-## URL
-{cur_url}
+            ## URL
+            {cur_url}
 
-## Last Action Result
-{self._format_last_result(state)}
+            ## Action History
+            {history_context}
 
-## Action History
-{history_context}
-
-## Current Page Elements (Accessibility Tree)
-Use these IDs (bid) for your actions:
-{cur_axtree_txt}
-""".strip()
+            ## Current Page Elements (Accessibility Tree)
+            {cur_axtree_txt}
+            """.strip()
 
         if state.intent:
-            prompt += f"\n\n## Your Original Plan: {state.intent.approach}"
+            prompt = f"\n\n## Your Original Plan: {state.intent.approach}." + prompt
 
-        # Add instructions
-        prompt += """
-
-## Instructions
-- Pick at most THREE actions based on the accessibility tree above
-- Use the exact bid from the tree
-- fill() just types text - remember to click submit or press Enter after
-- Only send_msg_to_user() when you have the COMPLETE answer
-"""
-
-        # Extra warning if stuck
         if state.is_stuck():
-            print("=============== STUCK DETECTED ==============")
-            
-            # Get loop info for specific guidance
             loop_info = state.view.get_loop_info()
-            
-            prompt += f"""
-
-🚨 YOU ARE STUCK - STOP REPEATING YOURSELF 🚨
-
-You have been repeating actions that aren't working.
-{f"Repeated pattern: {' → '.join(loop_info[0])}" if loop_info else ""}
-
-MANDATORY: Try something COMPLETELY DIFFERENT:
-1. Look at the accessibility tree - find a DIFFERENT element
-2. Is there a modal/popup blocking? Look for "Close", "X", or "Dismiss"
-3. Is this a date picker? Look for "Done" or "Apply" button
-4. Did you fill a search box? Look for a search BUTTON to click
-5. Scroll to find elements you haven't seen
-
-DO NOT repeat any action you've already tried.
-"""
+            stuck_prompt = self.get_stuck_prompt(loop_info)
+            prompt += stuck_prompt
         return prompt
 
-    def _format_last_result(self, state: State) -> str:
-        """Format the last action's result clearly."""
-        last_action = state.get_last_action()
-        last_obs = state.get_last_observation()
-        
-        if not last_action:
-            return "No previous action (starting fresh)"
-        
-        result = f"Action: `{last_action.code}`\n"
-        
-        if last_obs:
-            if last_obs.error:
-                result += f"❌ FAILED: {last_obs.error}"
-            elif last_obs.last_action_success:
-                result += f"✓ SUCCESS"
-                if "fill(" in last_action.code:
-                    result += "\n⚠️ Text was typed but NOT submitted. Click a button or press Enter to submit."
-            else:
-                result += "⚠️ NO CHANGE: Action may not have worked"
-        
-        return result
+    def get_stuck_prompt(self, loop_info):
+        return f"""
 
-    def _validate_action(self, action_code: str) -> Tuple[str, Optional[str]]:
+            🚨 YOU ARE STUCK - STOP REPEATING YOURSELF 🚨
+
+            You have been repeating actions that aren't working.
+            {f"Repeated pattern: {' → '.join(loop_info[0])}" if loop_info else ""}
+
+            MANDATORY: Try something COMPLETELY DIFFERENT:
+            1. Look at the accessibility tree - find a DIFFERENT element
+            2. Is there a modal/popup blocking? Look for "Close", "X", or "Dismiss"
+            3. Is this a date picker? Look for "Done" or "Apply" button
+            4. Did you fill a search box? Look for a search BUTTON to click
+            5. Scroll to find elements you haven't seen
+
+            DO NOT repeat any action you've already tried.
+            """
+
+    def validate_action(self, action_code: str) -> Tuple[str, Optional[str]]:
         """
         Validate and fix common action syntax errors.
         Returns (fixed_action, error_message) or (original_action, None) if valid.
@@ -439,29 +396,21 @@ DO NOT repeat any action you've already tried.
         original = action_code
         error_msg = None
         
-        # Fix fill() with 3 arguments (remove the third)
-        # fill('123', 'text', true) -> fill('123', 'text')
         fill_match = re.match(r"fill\s*\(\s*(['\"][^'\"]+['\"])\s*,\s*(['\"][^'\"]*['\"])\s*,\s*\w+\s*\)", action_code)
         if fill_match:
             action_code = f"fill({fill_match.group(1)}, {fill_match.group(2)})"
             error_msg = f"Removed extra argument from fill(): {original} -> {action_code}"
-        
-        # Fix fill() with unquoted bid
-        # fill(123, 'text') -> fill('123', 'text')
+
         fill_unquoted = re.match(r"fill\s*\(\s*(\d+)\s*,\s*(['\"].+['\"])\s*\)", action_code)
         if fill_unquoted:
             action_code = f"fill('{fill_unquoted.group(1)}', {fill_unquoted.group(2)})"
             error_msg = f"Added quotes to bid: {original} -> {action_code}"
         
-        # Fix click() with unquoted bid
-        # click(123) -> click('123')
         click_unquoted = re.match(r"click\s*\(\s*(\d+)\s*\)", action_code)
         if click_unquoted:
             action_code = f"click('{click_unquoted.group(1)}')"
             error_msg = f"Added quotes to bid: {original} -> {action_code}"
         
-        # Fix press() with wrong quotes or format
-        # press(Enter) -> press('Enter')
         press_unquoted = re.match(r"press\s*\(\s*(\w+)\s*\)", action_code)
         if press_unquoted and not action_code.startswith("press('") and not action_code.startswith('press("'):
             action_code = f"press('{press_unquoted.group(1)}')"
@@ -477,16 +426,16 @@ DO NOT repeat any action you've already tried.
             input=[{
                 "role": "system",
                 "content": """Analyze why the browser automation is stuck. Common issues:
-1. Typed into a field but forgot to click submit or press Enter
-2. Using wrong element ID
-3. A modal/popup/datepicker is open and blocking
-4. Need to click a "Done" or "Apply" button
-5. Element not visible - need to scroll
+                        1. Typed into a field but forgot to click submit or press Enter
+                        2. Using wrong element ID
+                        3. A modal/popup/datepicker is open and blocking
+                        4. Need to click a "Done" or "Apply" button
+                        5. Element not visible - need to scroll
 
-Be specific about what to try differently."""
+                        Be specific about what to try differently."""
             }, {
                 "role": "user", 
-                "content": f"Goal: {state.goal}\n\nRecent Actions:\n{recent_history}\n\nLast error: {last_error}"
+                "content": f"Goal: {state.goal}\n\n Original Intent: {state.intent}\n\nRecent Actions:\n{recent_history}\n\nLast error: {last_error}"
             }],
             text_format=ReflectionFormat
         )
@@ -498,6 +447,5 @@ Be specific about what to try differently."""
         return reflection.new_approach
 
     def cleanup(self):
-        """Shutdown the agent."""
         self._command_queue.put(None)
         self._agent_thread.join(timeout=5.0)

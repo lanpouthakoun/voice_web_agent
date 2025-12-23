@@ -20,13 +20,10 @@ class VoiceControlledAgent:
     ):
         self.openai_client = OpenAI(api_key=openai_api_key)
         
-        # Initialize speech output
         self.speech = SpeechOutput(api_key=elevenlabs_api_key, voice_id=voice_id)
         
-        # Initialize browser agent with speech
         self.agent = BrowserAgent(llm=llm, client=self.openai_client, speech=self.speech)
         
-        # Audio settings
         self.recognizer = sr.Recognizer()
         self.recognizer.dynamic_energy_threshold = True
         self.mic_index = mic_index
@@ -34,17 +31,15 @@ class VoiceControlledAgent:
         self.chunk_size = 1024
         self.channels = 1
         
-        # State
         self.is_recording = False
         self.option_pressed = False
         self.recorded_frames = []
         self.audio = None
         self.stream = None
         
-        # Threading
         self.transcription_queue = queue.Queue()
 
-    def _record_audio_directly(self) -> Optional[bytes]:
+    def record_audio_directly(self) -> Optional[bytes]:
         """Record audio directly while Option is pressed."""
         if not self.audio:
             self.audio = pyaudio.PyAudio()
@@ -86,7 +81,7 @@ class VoiceControlledAgent:
                 self.stream = None
             return None
 
-    def _transcribe_audio(self, wav_data: bytes) -> Optional[str]:
+    def transcribe_audio(self, wav_data: bytes) -> Optional[str]:
         """Transcribe audio data to text."""
         wav_stream = io.BytesIO(wav_data)
         wav_stream.name = "audio.wav"
@@ -120,18 +115,18 @@ class VoiceControlledAgent:
             self.option_pressed = True
             self.is_recording = True
             
-            # If agent is running, signal it to stop
+
+            ### MAKE CHANGES HERE
             if self.agent.is_running():
-                print("\n🔄 Interrupting current task...")
+                print("\n Interrupting current task...")
                 self.agent.stop()
 
-            # Stop any ongoing speech
             self.speech.stop()
 
-            print("\n🎤 Recording... (release Option to stop)")
+            print("\n Recording... (release Option to stop)")
 
             def record_and_process():
-                raw_audio = self._record_audio_directly()
+                raw_audio = self.record_audio_directly()
                 if raw_audio:
                     try:
                         audio_data = sr.AudioData(
@@ -158,25 +153,24 @@ class VoiceControlledAgent:
 
             print("⏹️  Recording stopped. Transcribing...")
 
-    def _run_agent_with_goal(self, goal: str):
+    def run_agent_with_goal(self, goal: str):
         """Run the browser agent with a goal."""
         self.agent.run(goal, max_steps=50)
 
-    async def _process_transcriptions(self):
+    async def process_transcriptions(self):
         """Process transcription queue and dispatch to agent."""
         while True:
             try:
                 if not self.transcription_queue.empty():
                     wav_data = self.transcription_queue.get()
                     
-                    text = self._transcribe_audio(wav_data)
+                    text = self.transcribe_audio(wav_data)
 
                     if text:
                         print(f"\n📝 Transcription: {text}")
                         print("=" * 60)
                                 
-                        # Start agent with transcribed goal
-                        self._run_agent_with_goal(text)
+                        self.run_agent_with_goal(text)
                     else:
                         print("\n⚠️  No valid transcription. Try again.")
                         print("🎤 Ready for voice command. Press Option to speak...")
@@ -187,7 +181,7 @@ class VoiceControlledAgent:
                 print(f"[Process Error]: {e}")
                 await asyncio.sleep(0.1)
 
-    async def _keep_alive(self):
+    async def keep_alive(self):
         """Keep the main loop alive."""
         print("\n" + "=" * 60)
         print("🎙️  Voice-Controlled Browser Agent Ready!")
@@ -198,7 +192,6 @@ class VoiceControlledAgent:
         print("• Press Escape or Ctrl+C to exit")
         print("=" * 60 + "\n")
         
-        # Speak welcome message
         self.speech.speak("Voice controlled browser agent ready. Press Option to give a command.", wait=True)
         
         print("🎤 Ready for voice command. Press Option to speak...\n")
@@ -239,8 +232,8 @@ class VoiceControlledAgent:
         keyboard_thread.start()
 
         await asyncio.gather(
-            self._keep_alive(),
-            self._process_transcriptions()
+            self.keep_alive(),
+            self.process_transcriptions()
         )
 
     def cleanup(self):

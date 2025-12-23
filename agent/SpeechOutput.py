@@ -13,11 +13,6 @@ class SpeechOutput:
         Args:
             api_key: ElevenLabs API key
             voice_id: Voice ID to use (default is "George")
-                     Other options: 
-                     - "21m00Tcm4TlvDq8ikWAM" (Rachel)
-                     - "AZnzlk1XvdvUeBnXmlld" (Domi)
-                     - "EXAVITQu4vr4xnSDxMaL" (Bella)
-                     - "ErXwobaYiN019PkySvjV" (Antoni)
         """
         self.client = ElevenLabs(api_key=api_key)
         self.voice_id = voice_id
@@ -43,7 +38,6 @@ class SpeechOutput:
 
         def _speak_thread():
             try:
-                # Generate audio stream from ElevenLabs
                 audio_stream = self.client.text_to_speech.stream(
                     text=text,
                     voice_id=self.voice_id,
@@ -51,7 +45,6 @@ class SpeechOutput:
                     output_format="pcm_22050",
                 )
 
-                # Open audio output stream
                 stream = self.audio.open(
                     format=pyaudio.paInt16,
                     channels=1,
@@ -61,7 +54,6 @@ class SpeechOutput:
                 )
 
                 try:
-                    # Play audio chunks as they arrive
                     for chunk in audio_stream:
                         with self._lock:
                             if self._stop_speaking:
@@ -73,7 +65,7 @@ class SpeechOutput:
                     stream.close()
 
             except Exception as e:
-                print(f"🔇 Speech error: {e}")
+                print(f" Speech error: {e}")
             finally:
                 with self._lock:
                     self._is_speaking = False

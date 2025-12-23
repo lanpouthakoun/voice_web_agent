@@ -87,7 +87,6 @@ class State:
                 return event
         return None
 
-    # --- Your Logic Ported to use Events ---
 
     def compute_page_hash(self, obs_dict: dict) -> str:
         url = obs_dict.get('url', '')
@@ -95,13 +94,10 @@ class State:
         content = f"{url}|{axtree}"
         return hashlib.md5(content.encode()).hexdigest()
 
-    # In state.py - update_from_observation()
-
     def update_from_observation(self, obs_dict: dict) -> BrowserObservation:
         """
         Takes raw gym dict, updates state metrics, returns typed Event.
         """
-        # 1. Calculate Hash & Change Detection
         new_hash = self.compute_page_hash(obs_dict)
         new_url = obs_dict.get('url', '')
         
@@ -119,13 +115,13 @@ class State:
             action_success = False
         elif not has_changed:
             self.consecutive_no_change += 1
-            self.consecutive_errors += 1  # Treat as error
+            self.consecutive_errors += 1 
             action_success = False
-            error_msg = "Action had no visible effect on the page"  # ← ADD THIS
+            error_msg = "Action had no visible effect on the page" 
         else:
             self.consecutive_errors = 0
             self.consecutive_no_change = 0
-            self._last_page_hash = new_hash  # Only updated here!
+            self._last_page_hash = new_hash  
             self._last_url = new_url
         
         self._last_page_hash = new_hash
