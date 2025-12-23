@@ -108,7 +108,7 @@ The agent consists of three main components: speech-to-text, a browser agent, an
 | **PlaywrightMCP** | DOM/AXTree access | Low latency, structured element IDs, no vision model needed | No visual reasoning, can't handle canvas/images | ✅ Chosen — speed was priority |
 | **Claude Computer Use** | Screenshot + vision | Can reason about layout, handles any UI | 200-500ms per frame, requires vision model calls | Too slow for real-time voice |
 | **Qwen Computer Use** | Screenshot + vision | Open weights, can self-host | Same latency issues as Claude |  Same tradeoff |
-| **BrowserUse** | High-level browser API | Simple API, good abstractions | Less control over action space | I wanted to create a custom agent |
+| **BrowserUse** | High-level browser API | Simple API, good abstractions | No internal control over agent | I wanted to create a custom agent |
 | **Browser Base** | Cloud browser infrastructure | Scalable, no local browser needed | Added network latency, cost | Local browser faster for demos |
 ---
 
@@ -163,6 +163,7 @@ The agent consists of three main components: speech-to-text, a browser agent, an
  - To decrease latency, some explanations are skipped, sometimes this leads to page changes that are left unexplained
  - Each browser action is a single action (no multiaction), this is to maintain the best possible accuracy within tasks; however, it leads to slower output
  - By separating browser actions, it leads to more api calls, to make this more cost effective, I would need to rely less on single actions or use a cheaper model (mostly tested with gpt-5.2)
+ - Some of the explanations aren't directly suited for voice agents. Could be better prompted.
 
 
 ## Future Work
