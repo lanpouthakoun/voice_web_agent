@@ -170,3 +170,6 @@ The agent consists of three main components: speech-to-text, a browser agent, an
   - Hybrid vision fallback for canvas/complex widgets
   - Voice activity detection to replace push-to-talk
   - Multi-action batching for simple sequences
+  - 
+## Demo
+[Watch the demo](https://www.loom.com/share/c97a9b31ff374b06bc4ec9792dfcc870)
