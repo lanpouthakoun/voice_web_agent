@@ -89,7 +89,7 @@ class BrowserAgent:
             model=self.llm,
             input=[{
                 "role": "system", 
-                "content": """You're about to help with a web task. Briefly describe your understanding and approach. Don't add extra functionality, do what the user desires.
+                "content": """You are a Browser Agent with full access to a browser about to help with a web task. Briefly describe your understanding and approach. Don't add extra functionality, do what the user desires.
 
                     Be conversational. Do NOT ask the user for permission - just complete the task."""
             }, {
@@ -163,6 +163,7 @@ class BrowserAgent:
                     )
                     
                     self.speech.unmute()
+                    self.max_steps += max_steps
 
                 return
         
@@ -173,7 +174,7 @@ class BrowserAgent:
         with self._lock:
             self._stop_requested = False
             self._is_running = True
-
+        self.max_steps = max_steps
         self.current_state = State(goal=goal)
         intent = self.get_intent(goal)
         self.current_state.intent = intent
@@ -188,7 +189,7 @@ class BrowserAgent:
             self.current_state.add_event(initial_obs_event)
             
         try:
-            for step_num in range(max_steps):
+            for step_num in range(self.max_steps):
                 with self._lock:
                     if self._stop_requested:
                         print("\n🛑 Task interrupted by new voice command.")
@@ -196,7 +197,7 @@ class BrowserAgent:
                             self.speech.stop()
                         return
 
-                print(f"\n--- Step {step_num + 1}/{max_steps} ---")
+                print(f"\n--- Step {step_num + 1}/{self.max_steps} ---")
 
                 if self.current_state.consecutive_errors > 5:
                     if self.speech:
@@ -231,7 +232,7 @@ class BrowserAgent:
                             self.speech.speak("I cannot recover the browser.", wait=True)
                         break
 
-            print(f"\n⏰ Reached max steps ({max_steps})")
+            print(f"\n⏰ Reached max steps ({self.max_steps})")
             if self.speech:
                 self.speech.speak("I reached the maximum number of steps without finishing.", wait=True)
             
@@ -297,19 +298,11 @@ class BrowserAgent:
                 )
                 self.current_state.add_event(error_event)
                 return False
-        if "send_msg_to_user" in action_code:
-            if "send_msg_to_user" in action_code and self.speech:
-                try:
-                    import re
-                    match = re.search(r'send_msg_to_user\(["\'](.+?)["\']\)', action_code, re.DOTALL)
-                    if match:
-                        message = match.group(1)
-                        self.speech.speak(f"Here is what I found: {message}", wait=True)
-                except:
-                    pass
-            return True
-
-        
+            elif self.speech:
+                response = self.compile_result(action_code)
+                self.speech.speak(f"Here is what I found: {response}", wait = True)
+                return True
+            
         if self.speech:
             if self.speech_thread and self.speech_thread.is_alive():
                 print(f"Skipping speech (Previous still active): '{explanation}'")
@@ -328,7 +321,6 @@ class BrowserAgent:
                  print("⚠️ No page change detected")
             else:
                  print("✅ Page updated")
-
             
 
             return False
@@ -352,6 +344,37 @@ class BrowserAgent:
 
         self._command_queue.put(AgentCommand(goal=goal, on_complete=on_complete))
 
+
+    def compile_result(self, message: str) -> str:
+        """Compile the agent's findings into a concise spoken response."""
+        
+        goal = self.current_state.goal if self.current_state else "the requested task"
+        notes = self.current_state.scratchpad if self.current_state else ""
+        
+        system_prompt = f"""\
+    You are summarizing results for a voice assistant. The user asked: "{goal}"
+
+    A browser agent completed this task and gathered the following information. Your job is to deliver the findings as natural speech.
+
+    Rules:
+    - Be conversational and direct—no filler phrases like "I found that" or "Here's what I discovered"
+    - Lead with the most important information first
+    - Keep it under 3 sentences unless the data requires more
+    - Use natural spoken phrasing (say "around 300 dollars" not "$299.99")
+    - Don't list raw URLs or technical details, URLS should just be on the current screen in the browser
+    - Reference any notes the agent recorded: {notes if notes else "None"}
+
+    Respond with ONLY the spoken text—no labels, no formatting. Don't ask any questions if there are any, just the information found only."""
+
+        response = self.client.responses.create(
+            model=self.llm,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Agent's raw findings:\n{message}"}
+            ],
+        )
+        print(response.output_text)
+        return response.output_text
     def stop(self):
         """Request current task to stop."""
         with self._lock:
